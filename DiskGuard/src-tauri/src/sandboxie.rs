@@ -791,21 +791,29 @@ mod platform {
         }
 
         fn ensure_stopped(&self, box_name: &str) -> Result<(), String> {
-            let mut count = 0u32;
-            nt_check(
-                unsafe {
-                    (self.enum_process)(
-                        wide(box_name).as_ptr(),
-                        1,
-                        u32::MAX,
-                        ptr::null_mut(),
-                        &mut count,
-                    )
-                },
-                "Enumerate sandbox processes",
-            )?;
-            if count != 0 {
-                return Err(format!("Close all {count} processes in {box_name} before changing its policy. Existing processes cache Sandboxie settings"));
+            // Upstream linger/source-kill cleanup can briefly report an empty
+            // box before shutdown has settled. Require three empty samples;
+            // never terminate or wait out an actively running application.
+            for sample in 0..3 {
+                if sample != 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                let mut count = 0u32;
+                nt_check(
+                    unsafe {
+                        (self.enum_process)(
+                            wide(box_name).as_ptr(),
+                            1,
+                            u32::MAX,
+                            ptr::null_mut(),
+                            &mut count,
+                        )
+                    },
+                    "Enumerate sandbox processes",
+                )?;
+                if count != 0 {
+                    return Err(format!("Close all {count} processes in {box_name} before changing its policy. Existing processes cache Sandboxie settings"));
+                }
             }
             Ok(())
         }

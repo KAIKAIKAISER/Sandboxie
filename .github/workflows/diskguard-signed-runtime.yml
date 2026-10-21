@@ -33,13 +33,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Install pinned official runtime after hash and signature verification
+        id: install-runtime
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./DiskGuard/scripts/Install-HostedRuntime.ps1
       - name: Execute real file access and process association tests
         run: ./DiskGuard/scripts/Test-Runtime.ps1 -AcknowledgeDisposableVm -EvidenceDirectory (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/runtime-results')
       - name: Execute the built application's actual Sandboxie adapter
-        if: inputs.build_run_id != ''
+        if: always() && steps['install-runtime'].outcome == 'success' && inputs.build_run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

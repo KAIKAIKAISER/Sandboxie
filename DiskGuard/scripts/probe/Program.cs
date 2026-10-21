@@ -18,6 +18,13 @@ internal static class Program
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate uint GetMessage(ref uint number, uint session, out uint message, out uint pid, IntPtr buffer, uint lengthBytes);
 
+    private static void WriteJsonAtomically(string output, object value)
+    {
+        string temporary = output + "." + Environment.ProcessId + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(temporary, output, overwrite: true);
+    }
+
     private static int CollectMessages(string dllPath, string output)
     {
         if (!Path.IsPathFullyQualified(dllPath)) throw new ArgumentException("SbieDll path must be absolute");
@@ -46,13 +53,13 @@ internal static class Program
                     strings = new string(characters).TrimEnd('\0').Split('\0'),
                 });
             }
-            File.WriteAllText(output, JsonSerializer.Serialize(new
+            WriteJsonAtomically(output, new
             {
                 source = "SbieApi_GetMessage",
                 session,
                 terminal_status = $"0x{status:X8}",
                 messages,
-            }, new JsonSerializerOptions { WriteIndented = true }));
+            });
             return 0;
         }
         finally
@@ -148,7 +155,7 @@ internal static class Program
             allowed_file = ReadFile(allowedFile),
             directory_enumeration = Enumerate(directory),
         };
-        File.WriteAllText(output, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+        WriteJsonAtomically(output, result);
         return 0;
     }
 }

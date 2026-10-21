@@ -109,6 +109,13 @@ function Set-VerifiedSetting {
 
 function Assert-Probe {
     param([string]$ResultPath, [string]$ExpectedBox, [bool]$Denied)
+    # ForceProcess may hand off to a separately started sandboxed replacement;
+    # the original host process handle can exit before its evidence is written.
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while (-not ((Test-Path -LiteralPath $ResultPath) -and (Test-Path -LiteralPath "$ResultPath.child.json"))) {
+        if ([DateTime]::UtcNow -ge $deadline) { throw "Probe parent/child evidence was not produced within 60 seconds: $ResultPath" }
+        Start-Sleep -Milliseconds 200
+    }
     foreach ($path in @($ResultPath, "$ResultPath.child.json")) {
         if (-not (Test-Path -LiteralPath $path)) { throw "Probe evidence missing: $path" }
         $result = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
