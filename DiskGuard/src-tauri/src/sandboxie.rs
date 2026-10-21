@@ -90,6 +90,88 @@ fn validate_policy(policy: &CompiledPolicy) -> Result<(), String> {
     Ok(())
 }
 
+/// Rule-specificity allows inherited paths to outrank a broad closed rule.
+/// Verify the effective rule collection before calling a profile a whitelist.
+fn check_whitelist_effective(
+    explicit_normal: &[String],
+    effective_normal: &[String],
+    other_allow: &BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    for (key, values) in other_allow {
+        if !values.is_empty() {
+            return Err(format!("Whitelist mode cannot safely coexist with effective {key} rules from this sandbox, GlobalSettings or templates. Remove those exceptions in a clean runtime configuration before applying whitelist mode"));
+        }
+    }
+    let mut inherited = effective_normal.to_vec();
+    for explicit in explicit_normal {
+        let Some(index) = inherited.iter().position(|value| value == explicit) else {
+            return Err("Cannot verify this sandbox's explicit NormalFilePath rules against its effective configuration".into());
+        };
+        inherited.remove(index);
+    }
+    if !inherited.is_empty() {
+        return Err("Whitelist mode found inherited NormalFilePath exceptions in GlobalSettings or templates. Use a clean runtime configuration before applying whitelist mode".into());
+    }
+    Ok(())
+}
+
+fn check_isolation_effective(settings: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+    for key in ["BreakoutProcess", "BreakoutFolder", "BreakoutDocument"] {
+        if settings.get(key).is_some_and(|values| !values.is_empty()) {
+            return Err(format!("Cannot apply protection while effective {key} rules permit leaving the sandbox. Remove the conflicting sandbox/global/template rules first; DiskGuard does not modify unrelated runtime configuration"));
+        }
+    }
+    for key in ["NoSecurityIsolation", "DisableFileFilter"] {
+        if let Some(values) = settings.get(key) {
+            for value in values {
+                if !value.trim().eq_ignore_ascii_case("n") {
+                    return Err(format!("Cannot verify protection with effective {key}={value}. This setting must be absent or explicitly n; inspect the sandbox/global/template configuration"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_intrinsic_whitelist_paths(paths: &[String]) -> Result<(), String> {
+    // Kernel-applied TemplateDefaultPaths is independent of per-box template
+    // inheritance. Only known pipe/console/network device namespaces are safe
+    // exceptions for a disk allowlist; volume, UNC, spool macros and unknown
+    // device paths can expose host files and must conservatively refuse it.
+    const NON_DISK_DEVICES: &[&str] = &[
+        r"\device\namedpipe",
+        r"\device\mailslot",
+        r"\device\afd",
+        r"\device\nsi",
+        r"\device\tcp",
+        r"\device\tcp6",
+        r"\device\udp",
+        r"\device\udp6",
+        r"\device\ip",
+        r"\device\ip6",
+        r"\device\rawip",
+        r"\device\rawip6",
+        r"\device\http",
+        r"\device\ws2ifsl",
+        r"\device\condrv",
+    ];
+    for value in paths {
+        let path = value
+            .rsplit_once(',')
+            .map_or(value.as_str(), |(_, p)| p)
+            .trim()
+            .trim_start_matches('|')
+            .to_lowercase();
+        if !NON_DISK_DEVICES
+            .iter()
+            .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}\\")))
+        {
+            return Err(format!("Whitelist mode cannot certify the runtime's intrinsic TemplateDefaultPaths exception {value}. It may allow host disk access outside the selected directories. Use a runtime template configuration without this disk exception; DiskGuard does not rewrite upstream templates"));
+        }
+    }
+    Ok(())
+}
+
 /// Bounds-checked parser for the exact MonitorGet2 wire format. Lengths are
 /// bytes, timestamps are FILETIME, and trailing tags must never become paths.
 fn parse_monitor_buffer(buffer: &[u8]) -> Result<Vec<MonitorRecord>, String> {
@@ -729,6 +811,15 @@ mod platform {
         }
 
         fn read_setting(&self, box_name: &str, key: &str) -> Result<Vec<String>, String> {
+            self.read_setting_flags(box_name, key, 0x7000_0000)
+        }
+
+        fn read_setting_flags(
+            &self,
+            box_name: &str,
+            key: &str,
+            flags: u32,
+        ) -> Result<Vec<String>, String> {
             let box_name = wide(box_name);
             let key = wide(key);
             let mut values = Vec::new();
@@ -738,7 +829,7 @@ mod platform {
                     (self.query_conf)(
                         box_name.as_ptr(),
                         key.as_ptr(),
-                        index | 0x7000_0000,
+                        index | flags,
                         buffer.as_mut_ptr(),
                         (buffer.len() * 2) as u32,
                     )
@@ -751,6 +842,59 @@ mod platform {
                 values.push(unwide(&buffer));
             }
             Err("Sandboxie configuration contains too many values".into())
+        }
+
+        fn ensure_clean_whitelist(
+            &self,
+            box_name: &str,
+            explicit_normal: &[String],
+        ) -> Result<(), String> {
+            // NO_EXPAND only: unlike managed-setting readback, include both
+            // global and template rules that are actually used by the driver.
+            let effective_normal =
+                self.read_setting_flags(box_name, "NormalFilePath", 0x2000_0000)?;
+            let mut allow = BTreeMap::new();
+            for key in [
+                "OpenFilePath",
+                "ReadFilePath",
+                "WriteFilePath",
+                "OpenPipePath",
+            ] {
+                allow.insert(
+                    key.to_string(),
+                    self.read_setting_flags(box_name, key, 0x2000_0000)?,
+                );
+            }
+            check_whitelist_effective(explicit_normal, &effective_normal, &allow)?;
+            for key in [
+                "OpenFilePath",
+                "ReadFilePath",
+                "WriteFilePath",
+                "NormalFilePath",
+                "OpenPipePath",
+            ] {
+                let intrinsic =
+                    self.read_setting_flags("TemplateDefaultPaths", key, 0x6000_0000)?;
+                check_intrinsic_whitelist_paths(&intrinsic)?;
+            }
+            Ok(())
+        }
+
+        fn ensure_isolation_settings(&self, box_name: &str) -> Result<(), String> {
+            let mut settings = BTreeMap::new();
+            for key in [
+                "BreakoutProcess",
+                "BreakoutFolder",
+                "BreakoutDocument",
+                "NoSecurityIsolation",
+                "DisableFileFilter",
+            ] {
+                settings.insert(
+                    key.into(),
+                    self.read_setting_flags(box_name, key, 0x2000_0000)?,
+                );
+            }
+            check_isolation_effective(&settings)
         }
 
         fn update(
@@ -804,9 +948,13 @@ mod platform {
             if policy.requires_specificity && !status.security_features_available {
                 return Err("Whitelist mode requires an active Sandboxie certificate with security features (UseRuleSpecificity). This runtime does not advertise that capability; no configuration was changed".into());
             }
+            self.ensure_isolation_settings(&policy.box_name)?;
             let mut previous = BTreeMap::new();
             for key in MANAGED_KEYS {
                 previous.insert(*key, self.read_setting(&policy.box_name, key)?);
+            }
+            if policy.requires_specificity {
+                self.ensure_clean_whitelist(&policy.box_name, &previous["NormalFilePath"])?;
             }
             if MANAGED_KEYS.iter().all(|key| {
                 previous[key].as_slice()
@@ -848,6 +996,17 @@ mod platform {
                             "Sandboxie configuration verification failed for {key}"
                         ));
                     }
+                }
+                self.ensure_isolation_settings(&policy.box_name)?;
+                if policy.requires_specificity {
+                    self.ensure_clean_whitelist(
+                        &policy.box_name,
+                        policy
+                            .settings
+                            .get("NormalFilePath")
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]),
+                    )?;
                 }
                 Ok(())
             })();
@@ -908,6 +1067,7 @@ mod platform {
                 return Err("Choose an existing absolute EXE path and valid arguments".into());
             }
             self.ensure_no_unboxed_process(exe, box_name)?;
+            self.ensure_isolation_settings(box_name)?;
             let enabled = self.read_setting(box_name, "Enabled")?;
             if !enabled.first().is_some_and(|v| v.starts_with(['y', 'Y'])) {
                 return Err(
@@ -1072,5 +1232,74 @@ mod tests {
             settings: BTreeMap::from([("ClosedFilePath".into(), vec!["path\nEnabled=n".into()])]),
         };
         assert!(validate_policy(&policy).is_err());
+    }
+    #[test]
+    fn whitelist_checks_effective_inheritance_as_a_multiset() {
+        let own = vec![r"|C:\Apps".to_string(), r"C:\Apps\*".to_string()];
+        let no_allow = BTreeMap::new();
+        assert!(check_whitelist_effective(&own, &own, &no_allow).is_ok());
+        let mut inherited = own.clone();
+        inherited.push(r"C:\Private\*".into());
+        assert!(check_whitelist_effective(&own, &inherited, &no_allow).is_err());
+        // Even duplicate inherited exceptions must not disappear via set math.
+        let mut duplicate = own.clone();
+        duplicate.extend(own.clone());
+        assert!(check_whitelist_effective(&own, &duplicate, &no_allow).is_err());
+        assert!(check_whitelist_effective(&own, &[], &no_allow).is_err());
+        for key in [
+            "OpenFilePath",
+            "ReadFilePath",
+            "WriteFilePath",
+            "OpenPipePath",
+        ] {
+            let allow = BTreeMap::from([(key.into(), vec![r"C:\Private\*".into()])]);
+            assert!(check_whitelist_effective(&own, &own, &allow).is_err());
+        }
+    }
+    #[test]
+    fn inherited_breakout_and_filter_disabling_settings_refuse_protection() {
+        assert!(check_isolation_effective(&BTreeMap::new()).is_ok());
+        for key in ["BreakoutProcess", "BreakoutFolder", "BreakoutDocument"] {
+            assert!(check_isolation_effective(&BTreeMap::from([(
+                key.into(),
+                vec!["client.exe".into()]
+            )]))
+            .is_err());
+        }
+        for key in ["NoSecurityIsolation", "DisableFileFilter"] {
+            assert!(
+                check_isolation_effective(&BTreeMap::from([(key.into(), vec!["n".into()])]))
+                    .is_ok()
+            );
+            for value in ["y", "client.exe,n", "unknown", ""] {
+                assert!(check_isolation_effective(&BTreeMap::from([(
+                    key.into(),
+                    vec![value.into()]
+                )]))
+                .is_err());
+            }
+        }
+    }
+    #[test]
+    fn intrinsic_disk_exceptions_refuse_whitelist_but_known_non_disk_devices_do_not() {
+        for path in [
+            r"\Device\NamedPipe\AudioSrv",
+            r"\Device\Afd\Endpoint",
+            r"\Device\MailSlot\",
+            r"client.exe,\Device\NamedPipe\spoolss",
+        ] {
+            assert!(check_intrinsic_whitelist_paths(&[path.into()]).is_ok());
+        }
+        for path in [
+            r"%DefaultSpoolDirectory%\*",
+            r"C:\Spool\*",
+            r"\\server\share\*",
+            r"\Device\Mup\server\share\*",
+            r"\Device\HarddiskVolume3\*",
+            r"\Device\NamedPipeSibling\Disk",
+            r"\Device\Unknown",
+        ] {
+            assert!(check_intrinsic_whitelist_paths(&[path.into()]).is_err());
+        }
     }
 }

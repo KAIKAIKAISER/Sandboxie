@@ -137,7 +137,7 @@ try {
     Set-VerifiedSetting -Name 'Enabled' -Values @('y')
     Set-VerifiedSetting -Name 'FileRootPath' -Values @((Join-Path $EvidenceDirectory 'sandbox'))
     Set-VerifiedSetting -Name 'FileTrace' -Values @('ad')
-    Set-VerifiedSetting -Name 'OpenFilePath' -Values @($resultDirectory, "$resultDirectory\*")
+    Set-VerifiedSetting -Name 'OpenFilePath' -Values @("|$resultDirectory", "$resultDirectory\*")
 
     $monitorOnly = Join-Path $resultDirectory 'monitor-only-launch.json'
     Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $monitorOnly)

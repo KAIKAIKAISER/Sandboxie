@@ -39,6 +39,18 @@ try {
     if (-not $result.success -or -not $result.status.available -or -not $result.monitor_enabled -or -not $result.poll_ok -or $result.records -lt 1) {
         throw 'Actual Rust adapter did not report successful runtime connection, monitor activation, polling and at least one parsed real event.'
     }
+    $uiSmokePath = Join-Path $evidenceDirectory 'ui-smoke.json'
+    $uiProcess = Start-Process -FilePath $application -ArgumentList @('--ui-smoke-test', ('"' + $uiSmokePath + '"'), '--background') -WindowStyle Hidden -PassThru
+    try {
+        if (-not $uiProcess.WaitForExit(60000)) { throw 'Built application native UI/WebView bridge smoke test timed out.' }
+        if ($uiProcess.ExitCode -ne 0) { throw "Built application UI smoke test exited with $($uiProcess.ExitCode)." }
+    }
+    finally { $uiProcess.Dispose() }
+    if (-not (Test-Path -LiteralPath $uiSmokePath)) { throw 'Built application did not write native UI smoke test evidence.' }
+    $uiResult = Get-Content -LiteralPath $uiSmokePath -Raw | ConvertFrom-Json
+    if (-not $uiResult.success -or -not $uiResult.frontend_initialized -or -not $uiResult.backend_invoked) {
+        throw 'Built application frontend did not complete real state retrieval, initialization and native bridge invocation.'
+    }
     [ordered]@{
         build_run_id = $BuildRunId
         build_head_sha = $run.head_sha
@@ -46,6 +58,7 @@ try {
         portable_sha256 = (Get-FileHash -LiteralPath $packages[0].FullName -Algorithm SHA256).Hash
         application_sha256 = (Get-FileHash -LiteralPath $application -Algorithm SHA256).Hash
         result = 'PASS: built application runtime adapter connection, monitor enable, poll and parsed real event'
+        ui_smoke_result = 'PASS: native UI/WebView startup, frontend initialization and backend bridge; visual appearance and user interactions are not assessed'
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'adapter-build-provenance.json') -Encoding utf8
 }
 finally { Stop-Transcript | Out-Null }

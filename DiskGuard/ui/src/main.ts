@@ -50,6 +50,10 @@ let page: Page = 'dashboard';
 let currentAppId = '';
 let dirty = false;
 let busy = false;
+let loading = nativeAvailable;
+let configurationReady = !nativeAvailable;
+let loadError = '';
+let persistedConfig = structuredClone(emptyConfig);
 let logs: LogResponse = { entries: [], notice: '尚未接收运行时事件。' };
 let logFilter: LogFilter = { search: '', appId: '', result: '', operation: '' };
 let lastRefresh = '';
@@ -61,7 +65,8 @@ const modalRoot = document.querySelector<HTMLDivElement>('#modal-root')!;
 
 const currentApp = () => state.config.apps.find(app => app.id === currentAppId) ?? state.config.apps[0];
 const runtimeReady = () => state.runtime.driverAvailable && state.runtime.serviceRunning;
-const policyStatus = (app: ManagedApp) => !app.enabled ? badge('策略停用') : dirty ? badge('有未保存更改') : state.pendingAppIds.includes(app.id) ? badge('待应用', 'purple-tone') : state.appliedAppIds.includes(app.id) ? badge('策略已写入', 'good') : badge('尚未应用');
+const policyBadge = (app: ManagedApp) => JSON.stringify(app) !== JSON.stringify(persistedConfig.apps.find(saved => saved.id === app.id)) ? badge('待保存', 'purple-tone') : !app.enabled ? badge('配置停用') : state.pendingAppIds.includes(app.id) ? badge('待应用', 'purple-tone') : state.appliedAppIds.includes(app.id) ? badge('策略已写入', 'good') : badge('尚未应用');
+const policyStatus = (app: ManagedApp) => `<span class="policy-state" data-app-id="${escape(app.id)}">${policyBadge(app)}</span>`;
 const appIcon = (app: Pick<ManagedApp, 'name'>, big = false) => {
   const kind = /微信|wechat|weixin/i.test(app.name) ? 'wechat' : /^qq|腾讯qq/i.test(app.name) ? 'qq' : 'apps';
   return `<span class="app-icon ${kind} ${big ? 'large' : ''}">${icon(kind, big ? 27 : 22)}</span>`;
@@ -83,6 +88,10 @@ function markDirty() {
     button.innerHTML = `${icon('disk', 16)}保存更改<span class="unsaved-dot"></span>`;
   });
   document.querySelectorAll('.save-state').forEach(element => { element.textContent = '有未保存的更改'; });
+  document.querySelectorAll<HTMLElement>('.policy-state').forEach(element => {
+    const app = state.config.apps.find(item => item.id === element.dataset.appId);
+    if (app) element.innerHTML = policyBadge(app);
+  });
 }
 
 function toast(message: string, type = 'success') {
@@ -120,9 +129,11 @@ function render() {
     <main class="main-content">
       <header class="topbar"><div class="breadcrumbs">工作空间 ${icon('arrow', 12)} <span>${titles[page][0]}</span></div><div class="topbar-right"><span class="local-tag">${icon('lock', 13)}本地运行</span><span class="topbar-divider"></span><button class="icon-button" data-action="theme-cycle" aria-label="切换深浅色主题" title="切换深浅色主题">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 18)}</button></div></header>
       <div class="page-body"><div class="page-heading"><div><div class="eyebrow">${page === 'dashboard' ? 'YOUR DIGITAL BOUNDARIES' : 'DISKGUARD WORKSPACE'}</div><h1>${titles[page][0]}</h1><p>${titles[page][1]}</p></div><div class="heading-actions">${page === 'logs' ? `<button class="button secondary" data-action="export-logs" ${busy ? 'disabled' : ''}>${icon('download', 16)}导出日志</button>` : page === 'dashboard' || page === 'apps' ? `<button class="button secondary" data-action="add-app">${icon('plus', 17)}添加应用</button>` : ''}<button class="button primary" data-action="save" data-save ${!dirty || busy ? 'disabled' : ''}>${icon('disk', 16)}${dirty ? '保存更改<span class="unsaved-dot"></span>' : '已保存'}</button></div></div>
+      ${loadError ? `<aside class="load-error" role="alert">${icon('info', 18)}<div><strong>配置尚未载入，编辑暂不可用</strong><p>${escape(loadError)}</p></div><button class="button secondary small" data-action="retry-load">重新载入</button></aside>` : ''}
       ${page === 'dashboard' ? dashboardView() : page === 'apps' ? appsView() : page === 'rules' ? rulesView() : page === 'logs' ? logsView() : settingsView()}
       <footer class="page-footer"><span>${icon('shield', 13)}基于 Sandboxie 开源沙箱能力</span><span class="save-state">${dirty ? '有未保存的更改' : '配置保存在本机'}</span></footer></div>
     </main></div>`;
+  root.inert = busy || loading;
 }
 
 function dashboardView() {
@@ -152,7 +163,7 @@ function appsView() {
   const app = currentApp();
   if (!app) return noAppsView();
   return `<div class="workspace-grid">${appList()}<div class="app-detail"><section class="panel app-profile"><div class="app-profile-header">${appIcon(app, true)}<div><h2>${escape(app.name)}</h2><div class="app-caption">${badge('独立沙箱', 'purple-tone')}${policyStatus(app)}<code>${escape(app.sandbox)}</code></div></div><div class="profile-actions"><button class="button secondary small" data-action="${app.executable ? 'launch' : 'change-exe'}" ${busy ? 'disabled' : ''}>${icon(app.executable ? 'play' : 'folder', 15)}${app.executable ? '沙箱启动' : '选择 EXE'}</button><button class="icon-button danger-hover" data-action="delete-app" data-id="${escape(app.id)}" title="移除应用" aria-label="移除应用">${icon('trash', 18)}</button></div></div><div class="profile-fields"><label>应用名称<input value="${escape(app.name)}" data-field="app-name" maxlength="80"/></label><label>沙箱名称<input value="${escape(app.sandbox)}" data-field="app-sandbox" maxlength="32" spellcheck="false"/></label><label class="full-width">程序位置<div class="input-with-button"><input readonly value="${escape(app.executable)}" placeholder="尚未选择实际可执行文件" title="${escape(app.executable)}"/><button class="button secondary small" data-action="change-exe">更换</button></div></label></div></section>
-    <section class="panel"><div class="panel-heading"><div><h3>访问策略</h3><p>配置策略后，保存并应用到 Sandboxie</p></div>${switchControl('app-enabled', app.enabled, '启用应用策略')}</div><div class="mode-options">${modeOption(app, 'blacklist', 'lock', '禁止访问指定目录', '保留沙箱默认访问边界')}${modeOption(app, 'whitelist', 'shield', '仅开放指定目录', '需为应用依赖设置白名单')}${modeOption(app, 'monitor', 'eye', '观察访问，不额外拦截', '保留 Sandboxie 基础隔离')}</div><div class="policy-explanation">${icon('info', 16)}<span>${app.mode === 'blacklist' ? '黑名单目录将拒绝文件访问。请避免直接屏蔽 Windows、程序安装位置及应用数据目录。' : app.mode === 'whitelist' ? '严格白名单依赖 Sandboxie 安全功能授权，未获授权时后端会拒绝应用。系统组件、程序依赖与数据目录也需显式开放，请先验证兼容性。' : '只监控模式不添加目录封锁规则。日志以运行时实际提供的事件为准。'}</span></div></section>
+    <section class="panel"><div class="panel-heading"><div><h3>访问策略</h3><p>配置策略后，保存并应用到 Sandboxie</p></div>${switchControl('app-enabled', app.enabled, '启用应用策略')}</div><div class="mode-options">${modeOption(app, 'blacklist', 'lock', '禁止访问指定目录', '保留沙箱默认访问边界')}${modeOption(app, 'whitelist', 'shield', '仅开放指定目录', '需为应用依赖设置白名单')}${modeOption(app, 'monitor', 'eye', '观察访问，不额外拦截', '保留 Sandboxie 基础隔离')}</div><div class="policy-explanation">${icon('info', 16)}<span>${app.mode === 'blacklist' ? '黑名单目录将拒绝文件访问。请避免直接屏蔽 Windows、程序安装位置及应用数据目录。' : app.mode === 'whitelist' ? '白名单需要有效的 Sandboxie 安全功能授权。为兼容运行，默认保留 Windows、Sandboxie、Program Files（含 x86）和应用安装目录的沙箱内访问；这些访问不直接放行宿主写入。其余目录需显式允许。' : '只监控模式不添加目录封锁规则。日志以运行时实际提供的事件为准。'}</span></div></section>
     <section class="panel"><div class="panel-heading"><div><h3>启动与进程关联</h3><p>${state.runtime.forceRulesDisabled ? '运行时已全局停用强制规则，自动保护当前无法生效' : '自动保护依赖运行时成功应用强制沙箱策略'}</p></div>${icon('bolt', 20)}</div><div class="setting-row"><div><strong>自动保护此应用</strong><p>应用在沙箱外启动时，交由 Sandboxie 强制进入指定沙箱</p></div>${switchControl('auto-protect', app.autoProtect, '自动保护此应用')}</div><div class="setting-row"><div><strong>强制关联子进程</strong><p>在沙箱外匹配父进程时强制纳入其子进程；沙箱内子进程默认继承</p></div>${switchControl('include-children', app.includeChildren, '强制关联子进程')}</div><div class="panel-action-footer"><span>${icon('info', 14)}策略写入与运行时保护状态分别验证</span><button class="button primary small" data-action="apply" ${busy ? 'disabled' : ''}>${icon('check', 16)}保存并应用策略</button></div></section>
     <section class="panel"><div class="panel-heading"><div><h3>目录规则 <span class="count-label">${app.rules.length}</span></h3><p>${app.mode === 'whitelist' ? '允许访问的目录' : app.mode === 'monitor' ? '规则在只监控模式下不执行封锁' : '禁止访问的目录'}</p></div><button class="button secondary small" data-action="add-rule" data-id="${escape(app.id)}">${icon('plus', 15)}添加目录</button></div>${ruleTable(app)}</section></div></div>`;
 }
@@ -165,7 +176,7 @@ function modeOption(app: ManagedApp, mode: PolicyMode, image: string, text: stri
 function rulesView() {
   const app = currentApp();
   if (!app) return noAppsView();
-  return `<div class="workspace-grid">${appList()}<div class="app-detail"><section class="panel"><div class="panel-heading"><div class="rule-heading-app">${appIcon(app)}<div><h3>${escape(app.name)} 的访问规则</h3><p>当前策略：${modeNames[app.mode]}</p></div></div><button class="button primary small" data-action="add-rule" data-id="${escape(app.id)}">${icon('plus', 16)}添加目录</button></div><div class="rules-context ${app.mode === 'monitor' ? 'warning-context' : ''}">${icon(app.mode === 'monitor' ? 'eye' : 'info', 18)}<span>${app.mode === 'monitor' ? '当前为只监控模式。下列目录规则保留在配置中，不添加目录封锁。' : app.mode === 'blacklist' ? '启用的目录规则会作为黑名单，禁止此应用访问匹配路径。' : '启用的目录规则会作为白名单；严格模式可能影响应用兼容性。'}</span></div>${ruleTable(app)}<div class="panel-action-footer"><span>${app.rules.filter(rule => rule.enabled).length} 条启用 · ${app.rules.filter(rule => rule.recursive).length} 条递归</span><button class="button primary small" data-action="apply" ${busy ? 'disabled' : ''}>${icon('check', 16)}保存并应用策略</button></div></section><aside class="info-card">${icon('folder', 25)}<h3>规则如何匹配？</h3><p>选择一个实际目录，并设置是否递归匹配其子目录。每个应用的规则单独保存，停用规则后不再写入相应访问策略。</p><p>已经运行的程序可能持有打开的文件句柄。更改策略后，请重新在沙箱内启动应用。</p></aside></div></div>`;
+  return `<div class="workspace-grid">${appList()}<div class="app-detail"><section class="panel"><div class="panel-heading"><div class="rule-heading-app">${appIcon(app)}<div><h3>${escape(app.name)} 的访问规则</h3><p>当前策略：${modeNames[app.mode]}</p></div></div><button class="button primary small" data-action="add-rule" data-id="${escape(app.id)}">${icon('plus', 16)}添加目录</button></div><div class="rules-context ${app.mode === 'monitor' ? 'warning-context' : ''}">${icon(app.mode === 'monitor' ? 'eye' : 'info', 18)}<span>${app.mode === 'monitor' ? '当前为只监控模式。下列目录规则保留在配置中，不添加目录封锁。' : app.mode === 'blacklist' ? '启用的目录规则会作为黑名单，禁止此应用访问匹配路径。' : '启用的目录规则会作为白名单；严格模式可能影响应用兼容性。'}</span></div>${ruleTable(app)}<div class="panel-action-footer"><span>${app.rules.filter(rule => rule.enabled).length} 条启用 · ${app.rules.filter(rule => rule.recursive).length} 条递归</span><button class="button primary small" data-action="apply" ${busy ? 'disabled' : ''}>${icon('check', 16)}保存并应用策略</button></div></section><aside class="info-card">${icon('folder', 25)}<h3>规则如何匹配？</h3><p>递归规则匹配指定目录与所有子目录。关闭递归时，仅匹配目录对象自身，不代表封锁目录内的文件。每个应用的规则单独保存，停用规则后不再写入相应访问策略。</p><p>已经运行的程序可能持有打开的文件句柄。更改策略后，请重新在沙箱内启动应用。</p></aside></div></div>`;
 }
 
 function ruleTable(app: ManagedApp) {
@@ -225,16 +236,51 @@ function showModal() {
 async function saveConfig() {
   await api.saveConfig(state.config);
   state = await api.getState();
+  persistedConfig = structuredClone(state.config);
   dirty = false;
 }
 
 async function withBusy(action: () => Promise<void>, success?: string) {
   if (busy) return;
   busy = true;
+  root.inert = true;
+  modalRoot.inert = true;
   root.classList.add('busy');
   try { await action(); if (success) toast(success); }
   catch (error) { toast(String(error instanceof Error ? error.message : error), 'error'); }
-  finally { busy = false; root.classList.remove('busy'); render(); }
+  finally { busy = false; modalRoot.inert = false; root.classList.remove('busy'); render(); }
+}
+
+async function loadState() {
+  loading = true;
+  root.inert = true;
+  try {
+    const value = await api.getState();
+    state = value;
+    persistedConfig = structuredClone(value.config);
+    configurationReady = true;
+    dirty = false;
+    loadError = '';
+    currentAppId = value.config.apps[0]?.id || '';
+    setTheme(value.config.settings.theme);
+    lastRefresh = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    void refreshLogs();
+  } catch (error) {
+    configurationReady = false;
+    loadError = String(error);
+    state.runtime.message = loadError;
+    toast(`无法载入配置：${loadError}`, 'error');
+  } finally {
+    loading = false;
+    render();
+    if (nativeAvailable && configurationReady) void api.frontendReady().catch(() => {});
+  }
+}
+
+function requireConfiguration() {
+  if (configurationReady) return true;
+  toast('请先重新载入配置，再编辑或保存。', 'error');
+  return false;
 }
 
 async function refreshRuntime(silent = false) {
@@ -274,6 +320,9 @@ document.addEventListener('click', async event => {
     return;
   }
   const action = target.dataset.action;
+  if (action === 'retry-load') { await loadState(); return; }
+  if (busy || loading) return;
+  if (!['refresh-runtime', 'refresh-logs', 'close-modal'].includes(action || '') && !requireConfiguration()) return;
   const app = currentApp();
   if (action === 'add-app' || action === 'add-preset') { modal = { type: 'app', preset: target.dataset.preset }; showModal(); }
   else if (action === 'close-modal') { modal = null; showModal(); }
@@ -292,17 +341,21 @@ document.addEventListener('click', async event => {
     toast('应用已从配置中移除。请保存更改以同步策略。', 'info');
   }
   else if (action === 'browse-exe' || action === 'browse-directory' || action === 'change-exe') {
-    try {
+    const originModal = modal;
+    const originInput = modalRoot.querySelector<HTMLInputElement>(`input[name="${action === 'browse-directory' ? 'path' : 'executable'}"]`);
+    const originNameInput = modalRoot.querySelector<HTMLInputElement>('input[name="name"]');
+    const originAppId = app?.id;
+    await withBusy(async () => {
       const path = action === 'browse-directory' ? await api.chooseDirectory() : await api.chooseExecutable();
       if (!path || Array.isArray(path)) return;
-      if (action === 'change-exe' && app) { app.executable = path; markDirty(); render(); }
-      else {
-        const input = modalRoot.querySelector<HTMLInputElement>(`input[name="${action === 'browse-directory' ? 'path' : 'executable'}"]`);
-        if (input) input.value = path;
-        const name = modalRoot.querySelector<HTMLInputElement>('input[name="name"]');
-        if (name && !name.value) name.value = path.split(/[\\/]/).pop()!.replace(/\.exe$/i, '');
+      if (action === 'change-exe') {
+        const originApp = state.config.apps.find(item => item.id === originAppId);
+        if (originApp) { originApp.executable = path; markDirty(); }
+      } else if (modal === originModal && originInput?.isConnected) {
+        originInput.value = path;
+        if (originNameInput?.isConnected && !originNameInput.value) originNameInput.value = path.split(/[\\/]/).pop()!.replace(/\.exe$/i, '');
       }
-    } catch (error) { toast(String(error), 'error'); }
+    });
   }
   else if (action === 'apply' && app) await withBusy(async () => { await saveConfig(); const result = await api.applyPolicy(app.id); toast(result.message || '访问策略已提交到运行时。'); state = await api.getState(); });
   else if (action === 'launch' && app) await withBusy(async () => { await saveConfig(); const result = await api.launchApp(app.id); toast(result.message || '已请求在沙箱中启动应用。'); state = await api.getState(); });
@@ -322,6 +375,7 @@ document.addEventListener('click', async event => {
 });
 
 document.addEventListener('input', event => {
+  if (busy || loading || !configurationReady) return;
   const input = event.target as HTMLInputElement;
   const app = currentApp();
   if (input.dataset.field === 'app-name' && app) { app.name = input.value; markDirty(); }
@@ -341,9 +395,22 @@ document.addEventListener('change', async event => {
     if (nativeAvailable) void refreshLogs(true);
     return;
   }
+  if (busy || loading || !requireConfiguration()) { render(); return; }
   const value = (input as HTMLInputElement).checked;
   const action = input.dataset.action;
-  if (action === 'app-enabled' && app) app.enabled = value;
+  if (action === 'app-enabled' && app) {
+    if (value && !app.executable) {
+      const appId = app.id;
+      await withBusy(async () => {
+        const path = await api.chooseExecutable();
+        if (!path || Array.isArray(path)) return;
+        const target = state.config.apps.find(item => item.id === appId);
+        if (target) { target.executable = path; target.enabled = true; markDirty(); }
+      });
+      return;
+    }
+    app.enabled = value;
+  }
   else if (action === 'auto-protect' && app) app.autoProtect = value;
   else if (action === 'include-children' && app) app.includeChildren = value;
   else if ((action === 'rule-enabled' || action === 'rule-recursive') && app) {
@@ -354,13 +421,22 @@ document.addEventListener('change', async event => {
   }
   else if (action === 'close-to-tray') state.config.settings.closeToTray = value;
   else if (action === 'autostart') {
-    const previous = state.config.settings.autostart;
     await withBusy(async () => {
-      await api.setAutostart(value);
-      state.config.settings.autostart = value;
-      markDirty();
-      try { await saveConfig(); toast(value ? '已启用当前用户开机启动。' : '已关闭开机启动。'); }
-      catch (error) { state.config.settings.autostart = previous; throw error; }
+      try {
+        await api.setAutostart(value);
+        state.config.settings.autostart = value;
+        persistedConfig.settings.autostart = value;
+        toast(value ? '已启用当前用户开机启动。' : '已关闭开机启动。');
+      } catch (error) {
+        // The OS registration may already have succeeded before persistence
+        // failed. Re-read this setting without replacing unrelated draft edits.
+        try {
+          const actual = (await api.getState()).config.settings.autostart;
+          state.config.settings.autostart = actual;
+          persistedConfig.settings.autostart = actual;
+        } catch { /* Keep the last confirmed state if the backend is unavailable. */ }
+        throw error;
+      }
     });
     return;
   }
@@ -372,11 +448,12 @@ document.addEventListener('submit', event => {
   const form = event.target as HTMLFormElement;
   if (form.id !== 'app-form' && form.id !== 'rule-form') return;
   event.preventDefault();
+  if (busy || loading || !requireConfiguration()) return;
   const data = new FormData(form);
   if (form.id === 'app-form') {
     const executable = String(data.get('executable') || '').trim();
     const name = String(data.get('name') || '').trim();
-    if (!name || !/^[A-Za-z]:[\\/].*\.exe$/i.test(executable)) { toast('请输入应用名称，并选择完整的 Windows EXE 路径。', 'error'); return; }
+    if (!name || !/^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+\\).+\.exe$/i.test(executable)) { toast('请输入应用名称，并选择完整的磁盘或 UNC EXE 路径。', 'error'); return; }
     if (state.config.apps.some(app => app.executable.toLowerCase() === executable.toLowerCase())) { toast('这个可执行文件已经添加到应用列表。', 'error'); return; }
     const id = uid();
     state.config.apps.push({ id, name, executable, sandbox: `DiskGuard_${id.replace(/-/g, '').slice(0, 12)}`, mode: 'monitor', enabled: true, autoProtect: false, includeChildren: true, rules: [] });
@@ -395,8 +472,8 @@ document.addEventListener('submit', event => {
 });
 
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && modal) { modal = null; showModal(); }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (dirty) void withBusy(saveConfig, '配置已保存到本机。'); }
+  if (event.key === 'Escape' && modal && !busy) { modal = null; showModal(); }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (dirty && configurationReady && !loading) void withBusy(saveConfig, '配置已保存到本机。'); }
   if (event.key === 'Enter' && (event.target as HTMLElement).matches('tr[data-action="log-detail"]')) (event.target as HTMLElement).click();
   if (event.key === 'Tab' && modal) {
     const elements = [...modalRoot.querySelectorAll<HTMLElement>('button:not([disabled]), input, select, [tabindex="0"]')];
@@ -408,7 +485,8 @@ document.addEventListener('keydown', event => {
 
 render();
 if (nativeAvailable) {
-  api.getState().then(value => { state = value; currentAppId = value.config.apps[0]?.id || ''; setTheme(value.config.settings.theme); lastRefresh = new Date().toLocaleTimeString('zh-CN', { hour12: false }); render(); return refreshLogs(); }).catch(error => { state.runtime.message = String(error); render(); toast(`无法载入配置：${String(error)}`, 'error'); });
+  void loadState();
   setInterval(() => { if (!document.hidden && page === 'logs') void refreshLogs(); }, 2500);
   setInterval(() => { if (!document.hidden && !busy) void refreshRuntime(true); }, 15000);
 }
+

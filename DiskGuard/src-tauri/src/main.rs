@@ -164,6 +164,31 @@ impl Backend {
         if !Path::new(&app.executable).is_file() {
             return Err("EXE 文件不存在，请重新选择并保存".into());
         }
+        let selected_path = std::fs::canonicalize(&app.executable)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .to_lowercase();
+        {
+            let inner = self.inner.lock().map_err(|_| "配置锁错误")?;
+            for other in inner
+                .config
+                .apps
+                .iter()
+                .filter(|other| other.enabled && other.id != app.id)
+            {
+                if let Ok(path) = std::fs::canonicalize(&other.executable) {
+                    let path = path.to_string_lossy().to_lowercase();
+                    if selected_path.starts_with(path.as_str())
+                        || path.starts_with(selected_path.as_str())
+                    {
+                        return Err(format!(
+                            "EXE 解析后的真实路径与「{}」重叠，不能分配独立的强制沙箱策略",
+                            other.name
+                        ));
+                    }
+                }
+            }
+        }
         let mut runtime = self.runtime.lock().map_err(|_| "运行时锁错误")?;
         let runtime = runtime
             .as_mut()
@@ -175,7 +200,8 @@ impl Backend {
         runtime.apply_policy(&policy::compile(&app)?)?;
         let mut inner = self.inner.lock().map_err(|_| "配置锁错误")?;
         inner.applied.insert(id.into(), app.clone());
-        store::write_json(&self.directory.join("applied.json"), &inner.applied)?;
+        store::write_json(&self.directory.join("applied.json"), &inner.applied)
+            .map_err(|e| format!("策略已在运行时生效，但状态记录保存失败：{e}。请保留此配置并修复配置目录写入权限后重新应用。"))?;
         drop(inner);
         if launch {
             runtime.launch(&app.sandbox, &app.executable, &[])?;
@@ -305,18 +331,43 @@ impl Backend {
 }
 
 #[tauri::command]
-fn get_state(state: State<'_, Arc<Backend>>) -> ViewState {
-    state.view()
+fn get_state(app: tauri::AppHandle, state: State<'_, Arc<Backend>>) -> ViewState {
+    let mut view = state.view();
+    if let Ok(enabled) = app.autolaunch().is_enabled() {
+        view.config.settings.autostart = enabled;
+    }
+    view
 }
 #[tauri::command]
 fn runtime_status(state: State<'_, Arc<Backend>>) -> Status {
     state.view().runtime
 }
 #[tauri::command]
+fn frontend_ready(app: tauri::AppHandle) -> Result<(), String> {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(index) = args.iter().position(|arg| arg == "--ui-smoke-test") {
+        let path = Path::new(
+            args.get(index + 1)
+                .ok_or("UI smoke test output path missing")?,
+        );
+        if !path.is_absolute() {
+            return Err("UI smoke test output must be an absolute path".into());
+        }
+        store::write_json(
+            path,
+            &serde_json::json!({"success":true,"frontend_initialized":true,"backend_invoked":true}),
+        )?;
+        app.exit(0);
+    }
+    Ok(())
+}
+#[tauri::command]
 async fn save_config(
+    app: tauri::AppHandle,
     state: State<'_, Arc<Backend>>,
-    config: Config,
+    mut config: Config,
 ) -> Result<ActionResult, String> {
+    config.settings.autostart = app.autolaunch().is_enabled().map_err(|e| e.to_string())?;
     let backend = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || backend.save(config))
         .await
@@ -434,6 +485,7 @@ fn set_autostart(
     state: State<'_, Arc<Backend>>,
     enabled: bool,
 ) -> Result<ActionResult, String> {
+    let _mutation = state.mutation.lock().map_err(|_| "后台状态锁错误")?;
     if enabled {
         app.autolaunch().enable()
     } else {
@@ -629,7 +681,8 @@ fn main() {
             launch_app,
             get_logs,
             export_logs,
-            set_autostart
+            set_autostart,
+            frontend_ready
         ])
         .build(tauri::generate_context!())
         .expect("DiskGuard failed to initialize")

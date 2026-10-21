@@ -272,6 +272,11 @@ input[readonly] { color: var(--muted); }
 .rules-context { display: flex; align-items: center; gap: 9px; margin: 1px 21px 17px; border: 1px solid #9d88ea22; background: var(--primary-soft); border-radius: 7px; padding: 12px; color: var(--primary); font-size: 9px; line-height: 1.7; }
 .rules-context > svg { flex-shrink: 0; }
 .warning-context { background: #c79b6010; border-color: #c79b6022; color: var(--warning); }
+.load-error { display: flex; align-items: flex-start; gap: 12px; padding: 16px; margin-bottom: 20px; border: 1px solid #c26e7c44; border-radius: 8px; color: var(--danger); background: var(--danger-soft); }
+.load-error > svg { flex-shrink: 0; margin-top: 2px; }
+.load-error > div { flex: 1; min-width: 0; }
+.load-error strong { font-size: 11px; font-weight: 500; }
+.load-error p { font-size: 10px; line-height: 1.7; margin-top: 5px; overflow-wrap: anywhere; }
 .info-card { padding: 24px; border: 1px solid var(--border-soft); border-radius: 10px; }
 .info-card > svg { color: var(--muted); margin-bottom: 13px; }
 .info-card h3 { font-size: 12px; font-weight: 500; }

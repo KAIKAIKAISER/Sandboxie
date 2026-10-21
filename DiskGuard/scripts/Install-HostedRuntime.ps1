@@ -19,12 +19,20 @@ try {
     if ($lock.repository -cne 'sandboxie-plus/Sandboxie' -or $lock.sha256 -notmatch '^[a-f0-9]{64}$') { throw 'Invalid runtime lockfile.' }
     $expectedUrl = "https://github.com/sandboxie-plus/Sandboxie/releases/download/$($lock.release_tag)/$($lock.asset)"
     if ($lock.url -cne $expectedUrl -or $lock.asset -notmatch '^Sandboxie-Classic-x64-v[0-9.]+\.exe$') { throw 'Runtime download is not the pinned official Classic x64 asset.' }
-    $metadata = Invoke-RestMethod -Uri "https://api.github.com/repos/sandboxie-plus/Sandboxie/releases/tags/$($lock.release_tag)" -Headers @{Accept='application/vnd.github+json'; 'User-Agent'='DiskGuard-signed-runtime-verification'}
+    if (-not $env:GH_TOKEN) { throw 'The hosted test job must provide its read-only GitHub token for official release metadata requests.' }
+    # Authentication is scoped to this known api.github.com metadata request.
+    # Never reuse these headers for the asset download, which may redirect.
+    $metadataHeaders = @{
+        Accept = 'application/vnd.github+json'
+        'User-Agent' = 'DiskGuard-signed-runtime-verification'
+        Authorization = "Bearer $env:GH_TOKEN"
+    }
+    $metadata = Invoke-RestMethod -Uri "https://api.github.com/repos/sandboxie-plus/Sandboxie/releases/tags/$($lock.release_tag)" -Headers $metadataHeaders -MaximumRetryCount 3 -RetryIntervalSec 3 -TimeoutSec 60
     if ($metadata.draft -or $metadata.prerelease) { throw 'Runtime must be an official stable release.' }
     $assets = @($metadata.assets | Where-Object { $_.name -ceq $lock.asset -and $_.browser_download_url -ceq $expectedUrl })
     if ($assets.Count -ne 1) { throw 'Pinned official release asset was not found.' }
     $installer = Join-Path $evidenceDirectory $lock.asset
-    Invoke-WebRequest -Uri $expectedUrl -OutFile $installer
+    Invoke-WebRequest -Uri $expectedUrl -OutFile $installer -MaximumRetryCount 3 -RetryIntervalSec 3 -TimeoutSec 120
     $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($hash -cne $lock.sha256) { throw "Runtime SHA256 mismatch. Expected $($lock.sha256), observed $hash" }
     $signature = Get-AuthenticodeSignature -LiteralPath $installer

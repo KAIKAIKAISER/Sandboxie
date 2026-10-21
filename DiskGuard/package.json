@@ -1,0 +1,10 @@
+{
+  "name": "diskguard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix ui run dev",
+    "build": "npm --prefix ui run build",
+    "tauri": "node ui/node_modules/@tauri-apps/cli/tauri.js"
+  }
+}
