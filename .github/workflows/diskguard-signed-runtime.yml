@@ -53,6 +53,8 @@ jobs:
           Get-CimInstance Win32_SystemDriver -Filter "Name='SbieDrv'" | Select-Object Name, State, Status, StartMode, PathName | ConvertTo-Json | Set-Content (Join-Path $directory 'driver-state.json')
           Get-CimInstance Win32_Service -Filter "Name='SbieSvc'" | Select-Object Name, State, Status, StartMode, PathName | ConvertTo-Json | Set-Content (Join-Path $directory 'service-state.json')
           Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddMinutes(-25); Level=1,2,3} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, ProviderName, Message | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $directory 'system-errors.json')
+          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-25); Level=1,2,3} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, ProviderName, Message | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $directory 'application-errors.json')
+          Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational'; StartTime=(Get-Date).AddMinutes(-25)} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, ProviderName, Message | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $directory 'code-integrity-events.json')
       - name: Upload runtime evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -62,6 +64,7 @@ jobs:
             DiskGuard/work/hosted-runtime/*.json
             DiskGuard/work/hosted-runtime/*.txt
             DiskGuard/work/hosted-runtime/runtime-results/*.json
+            DiskGuard/work/hosted-runtime/runtime-results/*.jsonl
             DiskGuard/work/hosted-runtime/runtime-results/*.txt
             DiskGuard/work/hosted-runtime/runtime-results/results/*.json
           if-no-files-found: warn

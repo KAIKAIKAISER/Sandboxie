@@ -15,6 +15,53 @@ internal static class Program
     [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
     private delegate int QueryProcess(IntPtr pid, StringBuilder box, IntPtr image, IntPtr sid, out uint session);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate uint GetMessage(ref uint number, uint session, out uint message, out uint pid, IntPtr buffer, uint lengthBytes);
+
+    private static int CollectMessages(string dllPath, string output)
+    {
+        if (!Path.IsPathFullyQualified(dllPath)) throw new ArgumentException("SbieDll path must be absolute");
+        IntPtr module = NativeLibrary.Load(dllPath);
+        IntPtr buffer = Marshal.AllocHGlobal(16384);
+        try
+        {
+            GetMessage getMessage = Marshal.GetDelegateForFunctionPointer<GetMessage>(NativeLibrary.GetExport(module, "SbieApi_GetMessage"));
+            uint sequence = 0;
+            uint status = 0;
+            uint session = (uint)Process.GetCurrentProcess().SessionId;
+            List<object> messages = new();
+            for (int index = 0; index < 256; index++)
+            {
+                Marshal.Copy(new byte[16384], 0, buffer, 16384);
+                status = getMessage(ref sequence, session, out uint message, out uint pid, buffer, 16384);
+                if (status != 0) break;
+                char[] characters = new char[8192];
+                Marshal.Copy(buffer, characters, 0, characters.Length);
+                messages.Add(new
+                {
+                    sequence,
+                    message_code = $"0x{message:X8}",
+                    message_id = message & 0xFFFF,
+                    pid,
+                    strings = new string(characters).TrimEnd('\0').Split('\0'),
+                });
+            }
+            File.WriteAllText(output, JsonSerializer.Serialize(new
+            {
+                source = "SbieApi_GetMessage",
+                session,
+                terminal_status = $"0x{status:X8}",
+                messages,
+            }, new JsonSerializerOptions { WriteIndented = true }));
+            return 0;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+            NativeLibrary.Free(module);
+        }
+    }
+
     private static object ReadFile(string path)
     {
         bool opened = false;
@@ -58,7 +105,18 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        try { return Run(args); }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            return 70;
+        }
+    }
+
+    private static int Run(string[] args)
+    {
         if (args.Length < 3) return 64;
+        if (args[0] == "--messages") return CollectMessages(args[1], args[2]);
         string directory = args[0];
         string allowedFile = args[1];
         string output = args[2];

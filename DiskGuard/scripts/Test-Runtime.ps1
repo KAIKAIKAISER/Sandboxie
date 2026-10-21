@@ -23,19 +23,72 @@ Start-Transcript -LiteralPath (Join-Path $EvidenceDirectory 'transcript.txt') | 
 $sandboxName = 'DGTest_' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
 $configCreated = $false
 $sbieIni = $null
+$sandboxStart = $null
+$probe = $null
+$runtimeDirectory = $null
+
+function Write-TestStage {
+    param([string]$Stage, [string]$State, [object]$Details)
+    Write-Host ("STAGE {0}: {1}" -f $Stage, $State)
+    [ordered]@{ time_utc = [DateTime]::UtcNow.ToString('o'); stage = $Stage; state = $State; details = $Details } |
+        ConvertTo-Json -Depth 6 -Compress | Add-Content -LiteralPath (Join-Path $EvidenceDirectory 'stages.jsonl') -Encoding utf8
+}
 
 function Invoke-ProcessChecked {
-    param([string]$Path, [string[]]$Arguments)
+    param([string]$Path, [string[]]$Arguments, [Parameter(Mandatory)][string]$Stage)
+    Write-TestStage -Stage $Stage -State 'starting' -Details @{ executable = $Path; arguments = $Arguments }
     $start = [Diagnostics.ProcessStartInfo]::new($Path)
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
     try {
-        if (-not $process.WaitForExit(120000)) { throw "Timed out waiting for $Path; inspect and stop the test box before retrying." }
-        if ($process.ExitCode -ne 0) { throw "$Path exited with $($process.ExitCode)" }
+        if (-not $process.WaitForExit(120000)) {
+            Write-TestStage -Stage $Stage -State 'timeout' -Details @{ pid = $process.Id }
+            throw "Stage $Stage timed out waiting for $Path; inspect and stop the test box before retrying."
+        }
+        $exitCode = $process.ExitCode
+        $exitHex = '0x{0:X8}' -f ([long]$exitCode -band 0xFFFFFFFFL)
+        Write-TestStage -Stage $Stage -State 'exited' -Details @{ pid = $process.Id; exit_code = $exitCode; exit_hex = $exitHex }
+        if ($exitCode -ne 0) { throw "Stage $Stage`: $Path exited with $exitCode ($exitHex)" }
     }
-    finally { $process.Dispose() }
+    finally {
+        try {
+            $stdout = if ($stdoutTask.Wait(3000)) { $stdoutTask.GetAwaiter().GetResult() } else { '[capture incomplete: an inherited pipe remains open]' }
+            $stderr = if ($stderrTask.Wait(3000)) { $stderrTask.GetAwaiter().GetResult() } else { '[capture incomplete: an inherited pipe remains open]' }
+            Set-Content -LiteralPath (Join-Path $EvidenceDirectory "process-$Stage.stdout.txt") -Value $stdout -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $EvidenceDirectory "process-$Stage.stderr.txt") -Value $stderr -Encoding utf8
+        }
+        finally { $process.Dispose() }
+    }
+}
+
+function Reset-TestBox {
+    param([string]$Stage)
+    # The dedicated probe has finished and its parent/child assertions passed.
+    # Stop remaining RpcSs/DcomLaunch helpers before changing policy or relaunching:
+    # their automatic KillAll shutdown can otherwise catch the next quick launch.
+    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/terminate') -Stage "$Stage-terminate-helpers"
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $consecutiveEmpty = 0
+    do {
+        $lines = @(& $sandboxStart "/box:$sandboxName" /silent /listpids | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        $count = -1
+        if ($LASTEXITCODE -ne 0 -or $lines.Count -lt 1 -or -not [int]::TryParse($lines[0], [ref]$count) -or $count -lt 0 -or $lines.Count -ne ($count + 1)) {
+            throw "Stage $Stage could not reliably enumerate the dedicated test box."
+        }
+        if ($count -eq 0) { $consecutiveEmpty++ } else { $consecutiveEmpty = 0 }
+        if ($consecutiveEmpty -ge 3) {
+            Write-TestStage -Stage $Stage -State 'box-stably-empty' -Details @{ box = $sandboxName }
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Stage $Stage`: dedicated test box did not stop before the next policy transition."
 }
 
 function Set-VerifiedSetting {
@@ -51,6 +104,7 @@ function Set-VerifiedSetting {
     if ($LASTEXITCODE -ne 0 -or ($actual -join "`n") -cne ($Values -join "`n")) {
         throw "Configuration readback mismatch: $Name"
     }
+    Write-TestStage -Stage 'configuration' -State 'readback-verified' -Details @{ setting = $Name; values = $actual }
 }
 
 function Assert-Probe {
@@ -130,8 +184,9 @@ try {
     $allowedFile = Join-Path $EvidenceDirectory 'allowed.txt'
     Set-Content -LiteralPath $allowedFile -Value 'allowed-fixture' -Encoding utf8
     $baseline = Join-Path $resultDirectory 'baseline.json'
-    Invoke-ProcessChecked -Path $probe -Arguments @($privateDirectory, $allowedFile, $baseline)
+    Invoke-ProcessChecked -Path $probe -Arguments @($privateDirectory, $allowedFile, $baseline) -Stage 'baseline'
     Assert-Probe -ResultPath $baseline -ExpectedBox '' -Denied $false
+    Write-TestStage -Stage 'baseline' -State 'assertions-passed' -Details $null
 
     $configCreated = $true
     Set-VerifiedSetting -Name 'Enabled' -Values @('y')
@@ -140,19 +195,25 @@ try {
     Set-VerifiedSetting -Name 'OpenFilePath' -Values @("|$resultDirectory", "$resultDirectory\*")
 
     $monitorOnly = Join-Path $resultDirectory 'monitor-only-launch.json'
-    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $monitorOnly)
+    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $monitorOnly) -Stage 'monitor-only'
     Assert-Probe -ResultPath $monitorOnly -ExpectedBox $sandboxName -Denied $false
+    Write-TestStage -Stage 'monitor-only' -State 'assertions-passed' -Details $null
+    Reset-TestBox -Stage 'after-monitor-only'
 
     Set-VerifiedSetting -Name 'ClosedFilePath' -Values @("|$privateDirectory", "$privateDirectory\*")
 
     $explicit = Join-Path $resultDirectory 'explicit-launch.json'
-    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $explicit)
+    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $explicit) -Stage 'blacklist'
     Assert-Probe -ResultPath $explicit -ExpectedBox $sandboxName -Denied $true
+    Write-TestStage -Stage 'blacklist' -State 'assertions-passed' -Details $null
+    Reset-TestBox -Stage 'after-blacklist'
 
     Set-VerifiedSetting -Name 'ClosedFilePath' -Values @()
     $disabledRules = Join-Path $resultDirectory 'disabled-rules-launch.json'
-    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $disabledRules)
+    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $disabledRules) -Stage 'disabled-rules'
     Assert-Probe -ResultPath $disabledRules -ExpectedBox $sandboxName -Denied $false
+    Write-TestStage -Stage 'disabled-rules' -State 'assertions-passed' -Details $null
+    Reset-TestBox -Stage 'after-disabled-rules'
     Set-VerifiedSetting -Name 'ClosedFilePath' -Values @("|$privateDirectory", "$privateDirectory\*")
 
     # Upstream treats a full path without a wildcard as a folder; a trailing
@@ -160,11 +221,21 @@ try {
     Set-VerifiedSetting -Name 'ForceProcess' -Values @("$probe*")
     Set-VerifiedSetting -Name 'ForceChildren' -Values @("$probe*")
     $forced = Join-Path $resultDirectory 'forced-launch.json'
-    Invoke-ProcessChecked -Path $probe -Arguments @($privateDirectory, $allowedFile, $forced)
+    Invoke-ProcessChecked -Path $probe -Arguments @($privateDirectory, $allowedFile, $forced) -Stage 'forced'
     Assert-Probe -ResultPath $forced -ExpectedBox $sandboxName -Denied $true
+    Write-TestStage -Stage 'forced' -State 'assertions-passed' -Details $null
+    Reset-TestBox -Stage 'after-forced'
 }
 finally {
     try {
+        if ($probe -and (Test-Path -LiteralPath $probe) -and $runtimeDirectory) {
+            try {
+                $messageReader = Join-Path (Split-Path -Parent $probe) 'DiskGuardMessageReader.exe'
+                Copy-Item -LiteralPath $probe -Destination $messageReader
+                Invoke-ProcessChecked -Path $messageReader -Arguments @('--messages', (Join-Path $runtimeDirectory 'SbieDll.dll'), (Join-Path $EvidenceDirectory 'sandboxie-messages.json')) -Stage 'collect-sandboxie-messages'
+            }
+            catch { Write-Warning "Sandboxie message capture failed: $($_.Exception.Message)" }
+        }
         if ($configCreated -and $sbieIni) {
             & $sbieIni set $sandboxName '*'
             $remaining = @(& $sbieIni query '*' | ForEach-Object { $_.Trim() })

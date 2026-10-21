@@ -27,6 +27,8 @@
 
 实时监控流由整个 Windows 会话共享，不能同时与其他监控器争抢。若 SandMan 正在监控，请先关闭其监控功能。短命进程退出后若无法验证沙箱归属，事件不会被猜测归入某个软件。
 
+白名单会额外检查全局规则、模板和 `TemplateDefaultPaths` 内置例外；发现磁盘放行规则或无法确认的路径时拒绝应用。官方默认模板中的打印目录例外也可能导致拒绝，因此拥有证书仍不等于可直接使用严格白名单。程序不会自动改写共享模板。所有模式也会拒绝已发现的逃逸规则、关闭隔离或关闭文件过滤的设置。
+
 ## 云端构建
 
 [Fork 仓库](https://github.com/KAIKAIKAISER/Sandboxie) · [Windows 构建记录](https://github.com/KAIKAIKAISER/Sandboxie/actions/workflows/diskguard.yml)

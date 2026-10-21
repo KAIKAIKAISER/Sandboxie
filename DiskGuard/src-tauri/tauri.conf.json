@@ -17,6 +17,10 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.png", "icons/icon.ico"],
+    "license": "GPL-3.0-or-later",
+    "licenseFile": "../LICENSE",
+    "homepage": "https://github.com/KAIKAIKAISER/Sandboxie/tree/diskguard/DiskGuard",
+    "resources": {"../LICENSE":"LICENSE.txt","../THIRD-PARTY-NOTICES.md":"THIRD-PARTY-NOTICES.md","../docs/RUNTIME.md":"README-runtime.md"},
     "shortDescription": "Sandboxie runtime disk access controller",
     "copyright": "GPL-3.0-or-later · DiskGuard contributors",
     "windows": {"webviewInstallMode":{"type":"downloadBootstrapper"},"nsis":{"installMode":"currentUser","languages":["SimpChinese","English"],"displayLanguageSelector":true}}

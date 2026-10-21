@@ -157,7 +157,7 @@ fn check_intrinsic_whitelist_paths(paths: &[String]) -> Result<(), String> {
     ];
     for value in paths {
         let path = value
-            .rsplit_once(',')
+            .split_once(',')
             .map_or(value.as_str(), |(_, p)| p)
             .trim()
             .trim_start_matches('|')
@@ -1298,6 +1298,7 @@ mod tests {
             r"\Device\HarddiskVolume3\*",
             r"\Device\NamedPipeSibling\Disk",
             r"\Device\Unknown",
+            r"client.exe,C:\Private,\Device\NamedPipe\Spoof",
         ] {
             assert!(check_intrinsic_whitelist_paths(&[path.into()]).is_err());
         }
