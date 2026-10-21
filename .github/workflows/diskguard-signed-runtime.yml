@@ -1,0 +1,64 @@
+name: DiskGuard signed runtime verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_signed_runtime_tests:
+        description: Install the pinned official signed Sandboxie runtime on this disposable GitHub-hosted VM and execute enforcement probes
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  signed-runtime:
+    if: inputs.run_signed_runtime_tests && github.repository != 'sandboxie-plus/Sandboxie'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install pinned official runtime after hash and signature verification
+        run: ./DiskGuard/scripts/Install-HostedRuntime.ps1
+      - name: Execute real file access and process association tests
+        run: ./DiskGuard/scripts/Test-Runtime.ps1 -AcknowledgeDisposableVm -EvidenceDirectory (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/runtime-results')
+      - name: Collect actual driver/service diagnostics
+        if: always()
+        run: |
+          $directory = Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          Get-CimInstance Win32_SystemDriver -Filter "Name='SbieDrv'" | Select-Object Name, State, Status, StartMode, PathName | ConvertTo-Json | Set-Content (Join-Path $directory 'driver-state.json')
+          Get-CimInstance Win32_Service -Filter "Name='SbieSvc'" | Select-Object Name, State, Status, StartMode, PathName | ConvertTo-Json | Set-Content (Join-Path $directory 'service-state.json')
+          Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddMinutes(-25); Level=1,2,3} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, ProviderName, Message | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $directory 'system-errors.json')
+      - name: Upload runtime evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskguard-signed-runtime-evidence-${{ github.run_id }}
+          path: |
+            DiskGuard/work/hosted-runtime/*.json
+            DiskGuard/work/hosted-runtime/*.txt
+            DiskGuard/work/hosted-runtime/runtime-results/*.json
+            DiskGuard/work/hosted-runtime/runtime-results/*.txt
+            DiskGuard/work/hosted-runtime/runtime-results/results/*.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Record scope without overstating Windows client validation
+        if: always()
+        run: |
+          @'
+          ## Signed runtime verification
+          A pass requires a trusted driver, successful real allowed/denied file access probes, sandbox launch, forced process launch, and child sandbox association.
+          Missing/unloadable drivers and probe errors fail this job; they are never converted into a passing skipped test.
+          This is a Windows Server 2022 hosted VM result, not Windows 10/11 client or QQ/WeChat UI compatibility validation.
+          No driver signing enforcement setting was changed. See uploaded evidence for the exact runtime and actual results.
+          '@ >> $env:GITHUB_STEP_SUMMARY

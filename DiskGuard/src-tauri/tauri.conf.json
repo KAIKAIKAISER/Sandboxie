@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DiskGuard",
+  "version": "0.1.0",
+  "identifier": "io.diskguard.desktop",
+  "build": {
+    "beforeDevCommand": "npm --prefix ui run dev",
+    "beforeBuildCommand": "npm --prefix ui run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [{"label":"main","title":"DiskGuard · 磁盘访问保护","width":1280,"height":820,"minWidth":1000,"minHeight":680}],
+    "security": {"csp":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-src 'none'"}
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "shortDescription": "Sandboxie runtime disk access controller",
+    "copyright": "GPL-3.0-or-later · DiskGuard contributors",
+    "windows": {"webviewInstallMode":{"type":"downloadBootstrapper"},"nsis":{"installMode":"currentUser","languages":["SimpChinese","English"],"displayLanguageSelector":true}}
+  }
+}

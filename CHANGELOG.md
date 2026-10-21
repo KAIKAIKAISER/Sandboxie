@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## DiskGuard downstream 0.1.0
+
+- Add an independent Windows x64 Rust/Tauri controller under `DiskGuard/`, with per-application Sandboxie policies, native runtime monitoring, tray and autostart support.
+- Add downstream Windows build/package/release and opt-in signed-runtime validation workflows. Sandboxie core and Qt UI remain unchanged. See `DiskGuard/README.md` for runtime, event and certificate limitations.
+
 
 
 

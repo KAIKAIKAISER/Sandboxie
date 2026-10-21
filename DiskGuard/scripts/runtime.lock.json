@@ -1,0 +1,9 @@
+{
+  "repository": "sandboxie-plus/Sandboxie",
+  "release_tag": "v1.18.8",
+  "classic_version": "5.73.8",
+  "asset": "Sandboxie-Classic-x64-v5.73.8.exe",
+  "sha256": "47b8dd6bc070d17c66e03a097df043214685208ea1c1522228e7ee009053fe5f",
+  "url": "https://github.com/sandboxie-plus/Sandboxie/releases/download/v1.18.8/Sandboxie-Classic-x64-v5.73.8.exe",
+  "provenance": "https://github.com/sandboxie-plus/Sandboxie/releases/expanded_assets/v1.18.8"
+}

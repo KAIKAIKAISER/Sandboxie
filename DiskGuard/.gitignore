@@ -1,0 +1,12 @@
+/ui/node_modules/
+/ui/dist/
+/src-tauri/target/
+/src-tauri/gen/
+/artifacts/
+*.log
+*.tmp
+/dist/
+/build-logs/
+/work/
+/scripts/probe/bin/
+/scripts/probe/obj/
