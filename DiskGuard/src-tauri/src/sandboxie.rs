@@ -259,13 +259,21 @@ mod platform {
         process::Command,
         ptr,
     };
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::System::{
+        Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        },
         LibraryLoader::{LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32},
         Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ},
         Services::{
             CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus,
             SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS,
         },
+        Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION},
     };
 
     type GetVersion = unsafe extern "system" fn(*mut u16) -> i32;
@@ -301,6 +309,7 @@ mod platform {
         query_driver_info: QueryDrvInfo,
         disable_force: MonitorControl,
         owns_monitor: bool,
+        monitor_requested: bool,
         buffer: Vec<u8>,
     }
 
@@ -313,6 +322,19 @@ mod platform {
     }
     fn unwide(text: &[u16]) -> String {
         String::from_utf16_lossy(&text[..text.iter().position(|c| *c == 0).unwrap_or(text.len())])
+    }
+
+    fn normalized_executable(path: &Path) -> Result<String, String> {
+        let absolute = path
+            .canonicalize()
+            .map_err(|e| format!("Cannot verify executable path {}: {e}", path.display()))?;
+        let text = absolute.to_string_lossy().replace('/', "\\");
+        let text = if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+        };
+        Ok(text.to_lowercase())
     }
     fn nt_check(status: i32, action: &str) -> Result<(), String> {
         if status < 0 {
@@ -439,6 +461,7 @@ mod platform {
                     _library: library,
                     install,
                     owns_monitor: false,
+                    monitor_requested: false,
                     buffer: vec![0; 1_048_576],
                 };
                 let status = runtime.status();
@@ -487,13 +510,17 @@ mod platform {
             if !service {
                 errors.push("Sandboxie SbieSvc service is not running".into());
             }
+            let available = errors.is_empty();
+            if monitoring != 0 && !self.owns_monitor {
+                errors.push("Another Sandboxie monitor is active in this Windows session; DiskGuard logging has not acquired its shared queue".into());
+            }
             let version = unwide(&version);
             RuntimeStatus {
-                available: errors.is_empty(),
+                available,
                 install_path: Some(self.install.to_string_lossy().into_owned()),
                 driver_version: (!version.is_empty()).then_some(version),
                 service_running: service,
-                monitoring: monitoring != 0,
+                monitoring: self.owns_monitor && monitoring != 0,
                 force_rules_disabled: force_disabled != 0,
                 security_features_available: features & 0x8000_0040 == 0x8000_0040,
                 error: (!errors.is_empty()).then(|| errors.join("; ")),
@@ -501,6 +528,7 @@ mod platform {
         }
 
         pub fn set_monitoring(&mut self, enabled: bool) -> Result<(), String> {
+            self.monitor_requested = enabled;
             let mut current = 0;
             nt_check(
                 unsafe { (self.monitor_control)(ptr::null(), &mut current) },
@@ -523,7 +551,18 @@ mod platform {
 
         pub fn poll(&mut self) -> Result<Vec<MonitorRecord>, String> {
             if !self.owns_monitor {
-                return Ok(Vec::new());
+                if !self.monitor_requested {
+                    return Ok(Vec::new());
+                }
+                let mut current = 0;
+                nt_check(
+                    unsafe { (self.monitor_control)(ptr::null(), &mut current) },
+                    "Query monitor state",
+                )?;
+                if current != 0 {
+                    return Ok(Vec::new());
+                }
+                self.set_monitoring(true)?;
             }
             let mut records = Vec::new();
             // Bound a polling turn so a busy process cannot starve commands.
@@ -576,6 +615,97 @@ mod platform {
                 }
             }
             Ok(records)
+        }
+
+        /// Avoid forwarding a single-instance launch (QQ/WeChat in particular)
+        /// to an existing unprotected instance. This is a launch-time check;
+        /// forcing remains the driver's responsibility and concurrent external
+        /// starts cannot be made atomic with a ToolHelp snapshot.
+        pub fn ensure_no_unboxed_process(
+            &self,
+            exe: &str,
+            expected_box: &str,
+        ) -> Result<(), String> {
+            valid_box(expected_box)?;
+            let expected_path = normalized_executable(Path::new(exe))?;
+            let basename = Path::new(exe)
+                .file_name()
+                .ok_or("Executable filename missing")?
+                .to_string_lossy()
+                .to_lowercase();
+            struct OwnedHandle(*mut c_void);
+            impl Drop for OwnedHandle {
+                fn drop(&mut self) {
+                    unsafe {
+                        CloseHandle(self.0);
+                    }
+                }
+            }
+            unsafe {
+                let raw_snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if raw_snapshot == INVALID_HANDLE_VALUE {
+                    return Err(format!(
+                        "Cannot inspect running programs (Windows error {})",
+                        GetLastError()
+                    ));
+                }
+                let snapshot = OwnedHandle(raw_snapshot);
+                let mut process: PROCESSENTRY32W = std::mem::zeroed();
+                process.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+                if Process32FirstW(snapshot.0, &mut process) == 0 {
+                    let code = GetLastError();
+                    return if code == ERROR_NO_MORE_FILES {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Cannot enumerate running programs (Windows error {code})"
+                        ))
+                    };
+                }
+                loop {
+                    if unwide(&process.szExeFile).to_lowercase() == basename {
+                        let pid = process.th32ProcessID;
+                        let raw_process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                        if raw_process.is_null() {
+                            return Err(format!("Cannot verify running {basename} (PID {pid}, Windows error {}). Close it before applying protection", GetLastError()));
+                        }
+                        let handle = OwnedHandle(raw_process);
+                        let mut image = vec![0u16; 32_768];
+                        let mut length = image.len() as u32;
+                        if QueryFullProcessImageNameW(handle.0, 0, image.as_mut_ptr(), &mut length)
+                            == 0
+                        {
+                            return Err(format!("Cannot inspect executable path of {basename} (PID {pid}, Windows error {}). Close it before applying protection", GetLastError()));
+                        }
+                        let image = String::from_utf16_lossy(&image[..length as usize]);
+                        if normalized_executable(Path::new(&image))? == expected_path {
+                            let mut box_name = [0u16; 34];
+                            let status = (self.query_process)(
+                                pid as usize as *mut c_void,
+                                0,
+                                box_name.as_mut_ptr(),
+                                ptr::null_mut(),
+                                ptr::null_mut(),
+                                ptr::null_mut(),
+                                ptr::null_mut(),
+                            );
+                            if status < 0 || !unwide(&box_name).eq_ignore_ascii_case(expected_box) {
+                                return Err(format!("{basename} (PID {pid}) is already running outside {expected_box}. Close that instance and its background processes before applying or launching protection"));
+                            }
+                        }
+                    }
+                    if Process32NextW(snapshot.0, &mut process) == 0 {
+                        let code = GetLastError();
+                        if code != ERROR_NO_MORE_FILES {
+                            return Err(format!(
+                                "Running-process verification interrupted (Windows error {code})"
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+            Ok(())
         }
 
         fn ensure_stopped(&self, box_name: &str) -> Result<(), String> {
@@ -733,6 +863,14 @@ mod platform {
                 {
                     rollback_errors.push(e);
                 }
+                for key in MANAGED_KEYS {
+                    match self.read_setting(&policy.box_name, key) {
+                        Ok(actual) if actual == previous[key] => (),
+                        Ok(_) => rollback_errors
+                            .push(format!("Restored {key} failed readback verification")),
+                        Err(e) => rollback_errors.push(e),
+                    }
+                }
                 if !rollback_errors.is_empty() {
                     return Err(format!("{error}; rollback incomplete: {}. Inspect Sandboxie.ini before launching the application", rollback_errors.join("; ")));
                 }
@@ -769,6 +907,7 @@ mod platform {
             {
                 return Err("Choose an existing absolute EXE path and valid arguments".into());
             }
+            self.ensure_no_unboxed_process(exe, box_name)?;
             let enabled = self.read_setting(box_name, "Enabled")?;
             if !enabled.first().is_some_and(|v| v.starts_with(['y', 'Y'])) {
                 return Err(
@@ -827,6 +966,9 @@ mod platform {
             Err(ERROR.into())
         }
         pub fn poll(&mut self) -> Result<Vec<MonitorRecord>, String> {
+            Err(ERROR.into())
+        }
+        pub fn ensure_no_unboxed_process(&self, _: &str, _: &str) -> Result<(), String> {
             Err(ERROR.into())
         }
         pub fn apply_policy(&mut self, policy: &CompiledPolicy) -> Result<(), String> {

@@ -86,6 +86,7 @@ internal static class Program
             is_child = isChild,
             child_exit_code = childExitCode,
             denied_file = ReadFile(Path.Combine(directory, "private.txt")),
+            sibling_file = ReadFile(Path.Combine(directory + "Sibling", "public.txt")),
             allowed_file = ReadFile(allowedFile),
             directory_enumeration = Enumerate(directory),
         };

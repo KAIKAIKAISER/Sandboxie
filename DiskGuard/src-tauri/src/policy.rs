@@ -77,9 +77,15 @@ pub fn validate_config(c: &Config) -> Result<(), String> {
             if !path.to_ascii_lowercase().ends_with(".exe") {
                 return Err("请选择 EXE 程序".into());
             }
-            if !exes.insert(path.to_lowercase()) {
-                return Err("同一 EXE 不能分配到多个沙箱".into());
+            let normalized = path.to_lowercase();
+            if exes.iter().any(|prior: &String| {
+                prior.starts_with(&normalized) || normalized.starts_with(prior)
+            }) {
+                return Err(
+                    "EXE 路径不能相同或互为前缀，避免 Sandboxie 原生强制路径规则冲突".into(),
+                );
             }
+            exes.insert(normalized);
         }
         if app.rules.len() > 256 {
             return Err("每个软件最多 256 条目录规则".into());
@@ -125,7 +131,9 @@ pub fn compile(app: &ManagedApp) -> Result<CompiledPolicy, String> {
             } else {
                 &mut normal
             };
-            target.push(p.clone());
+            // Upstream Process_AddPath appends '*' to a literal path unless
+            // its documented exact-match '|' marker suppresses AddStar.
+            target.push(format!("|{p}"));
             if rule.recursive {
                 target.push(format!("{}\\*", p.trim_end_matches('\\')));
             }
@@ -145,8 +153,13 @@ pub fn compile(app: &ManagedApp) -> Result<CompiledPolicy, String> {
             );
             let exe = literal_path(&app.executable)?;
             if let Some((dir, _)) = exe.rsplit_once('\\') {
-                normal.push(dir.to_string());
-                normal.push(format!("{dir}\\*"));
+                let dir = if dir.len() == 2 && dir.ends_with(':') {
+                    format!("{dir}\\")
+                } else {
+                    dir.to_owned()
+                };
+                normal.push(format!("|{dir}"));
+                normal.push(format!("{}\\*", dir.trim_end_matches('\\')));
             }
         }
     }
@@ -211,7 +224,10 @@ mod tests {
             recursive: true,
         });
         let p = compile(&a).unwrap();
-        assert_eq!(p.settings["ClosedFilePath"], [r"D:\Secret", r"D:\Secret\*"]);
+        assert_eq!(
+            p.settings["ClosedFilePath"],
+            [r"|D:\Secret", r"D:\Secret\*"]
+        );
         a.mode = Mode::Monitor;
         assert!(compile(&a).unwrap().settings["ClosedFilePath"].is_empty());
     }
@@ -223,6 +239,22 @@ mod tests {
         assert!(p.requires_specificity);
         assert_eq!(p.settings["ClosedFilePath"], ["*"]);
         assert!(!p.settings.contains_key("OpenFilePath"));
+        assert!(p.settings["NormalFilePath"].contains(&r"|C:\Apps".to_string()));
+        assert!(!p.settings["NormalFilePath"].contains(&r"C:\Apps".to_string()));
+    }
+    #[test]
+    fn non_recursive_rule_uses_native_exact_marker() {
+        let mut a = app();
+        a.rules.push(Rule {
+            id: "exact".into(),
+            path: r"D:\Secret".into(),
+            enabled: true,
+            recursive: false,
+        });
+        assert_eq!(
+            compile(&a).unwrap().settings["ClosedFilePath"],
+            [r"|D:\Secret"]
+        );
     }
     #[test]
     fn disabled_program_does_not_force() {
@@ -232,8 +264,25 @@ mod tests {
     }
     #[test]
     fn unique_executable_and_box_are_required() {
-        let mut c = Config::default();
-        c.apps = vec![app(), app()];
+        let c = Config {
+            apps: vec![app(), app()],
+            ..Config::default()
+        };
         assert!(validate_config(&c).is_err());
+    }
+    #[test]
+    fn forcing_executable_prefix_collisions_are_rejected() {
+        let mut first = app();
+        first.id = "one".into();
+        first.sandbox = "DiskGuard_one".into();
+        let mut second = app();
+        second.id = "two".into();
+        second.sandbox = "DiskGuard_two".into();
+        second.executable = r"C:\Apps\Client.exe2.exe".into();
+        let config = Config {
+            apps: vec![first, second],
+            ..Config::default()
+        };
+        assert!(validate_config(&config).is_err());
     }
 }

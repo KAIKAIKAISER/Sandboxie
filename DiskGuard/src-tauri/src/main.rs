@@ -11,7 +11,10 @@ use serde::Serialize;
 use std::{
     collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tauri::{
@@ -99,6 +102,7 @@ struct Backend {
     runtime: Mutex<Option<Runtime>>,
     mutation: Mutex<()>,
     directory: PathBuf,
+    shutting_down: AtomicBool,
 }
 impl Backend {
     fn new(directory: PathBuf) -> Result<Self, String> {
@@ -124,6 +128,7 @@ impl Backend {
             runtime: Mutex::new(None),
             mutation: Mutex::new(()),
             directory,
+            shutting_down: AtomicBool::new(false),
         })
     }
     fn view(&self) -> ViewState {
@@ -163,6 +168,7 @@ impl Backend {
         let runtime = runtime
             .as_mut()
             .ok_or("未连接 Sandboxie，请安装官方已签名运行时并等待连接")?;
+        runtime.ensure_no_unboxed_process(&app.executable, &app.sandbox)?;
         if app.auto_protect && runtime.status().force_rules_disabled {
             return Err("Sandboxie 已全局禁用强制规则；恢复强制沙箱后才能应用自动保护".into());
         }
@@ -214,7 +220,7 @@ impl Backend {
     fn monitor(self: Arc<Self>) {
         std::thread::spawn(move || {
             let mut retry = 0u32;
-            loop {
+            while !self.shutting_down.load(Ordering::Acquire) {
                 let mut runtime = self.runtime.lock().unwrap_or_else(|p| p.into_inner());
                 if runtime.is_none() && retry == 0 {
                     match Runtime::connect() {
@@ -446,7 +452,89 @@ fn set_autostart(
     })
 }
 
+/// Headless adapter smoke test for the disposable CI VM. It exercises this
+/// binary's exact ABI/config/monitor code, not a parallel mock implementation.
+fn runtime_diagnostics(destination: &str) -> bool {
+    let mut report = serde_json::json!({"success":false,"status":null,"monitor_enabled":false,"poll_ok":false,"records":0,"error":null});
+    let outcome = (|| -> Result<(), String> {
+        let mut runtime = Runtime::connect()?;
+        report["status"] = serde_json::to_value(runtime.status()).map_err(|e| e.to_string())?;
+        runtime.set_monitoring(true)?;
+        report["monitor_enabled"] = true.into();
+        let mut app = ManagedApp::preset("diag", "Adapter diagnostics");
+        app.sandbox = format!("DiskGuard_Diag_{}", std::process::id());
+        app.executable = format!(
+            "{}\\System32\\cmd.exe",
+            std::env::var("SystemRoot").map_err(|e| e.to_string())?
+        );
+        app.enabled = true;
+        app.auto_protect = false;
+        app.include_children = false;
+        app.mode = Mode::Monitor;
+        runtime.apply_policy(&policy::compile(&app)?)?;
+        let result = (|| -> Result<(), String> {
+            runtime.launch(
+                &app.sandbox,
+                &app.executable,
+                &["/d".into(), "/c".into(), "dir %SystemRoot% > nul".into()],
+            )?;
+            let mut records = Vec::new();
+            for _ in 0..30 {
+                records.extend(runtime.poll()?);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            report["poll_ok"] = true.into();
+            report["records"] = records.len().into();
+            report["sample"] = serde_json::to_value(records.iter().take(10).collect::<Vec<_>>())
+                .map_err(|e| e.to_string())?;
+            if records.is_empty() {
+                return Err(
+                    "No real monitor events were received during the sandboxed file access probe"
+                        .into(),
+                );
+            }
+            Ok(())
+        })();
+        // A short-lived helper may still be exiting; retry cleanup without
+        // killing any process or deleting sandbox contents.
+        let mut cleanup = runtime.remove_policy(&app.sandbox);
+        for _ in 0..30 {
+            if cleanup.is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            cleanup = runtime.remove_policy(&app.sandbox);
+        }
+        result?;
+        cleanup?;
+        report["success"] = true.into();
+        Ok(())
+    })();
+    if let Err(error) = outcome {
+        report["error"] = error.into();
+    }
+    let success = report["success"] == true;
+    if let Err(error) = store::write_json(Path::new(destination), &report) {
+        eprintln!("Cannot write diagnostics: {error}");
+        return false;
+    }
+    success
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "--runtime-diagnostics")
+    {
+        std::process::exit(
+            if args.get(2).is_some_and(|path| runtime_diagnostics(path)) {
+                0
+            } else {
+                1
+            },
+        );
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(w) = app.get_webview_window("main") {
@@ -543,8 +631,19 @@ fn main() {
             export_logs,
             set_autostart
         ])
-        .run(tauri::generate_context!())
-        .expect("DiskGuard failed to initialize");
+        .build(tauri::generate_context!())
+        .expect("DiskGuard failed to initialize")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                let backend = app.state::<Arc<Backend>>();
+                backend.shutting_down.store(true, Ordering::Release);
+                if let Ok(mut runtime) = backend.runtime.lock() {
+                    if let Some(runtime) = runtime.as_mut() {
+                        let _ = runtime.set_monitoring(false);
+                    }
+                };
+            }
+        });
 }
 
 #[cfg(test)]

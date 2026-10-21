@@ -45,6 +45,9 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'DiskGuard/src-tauri -> target'
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'

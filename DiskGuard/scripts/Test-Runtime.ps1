@@ -62,6 +62,9 @@ function Assert-Probe {
         if (-not $result.allowed_file.open_succeeded -or -not $result.allowed_file.read_succeeded -or $result.allowed_file.bytes_read -ne 1) {
             throw "Allowed fixture read failed: $path"
         }
+        if (-not $result.sibling_file.open_succeeded -or -not $result.sibling_file.read_succeeded -or $result.sibling_file.bytes_read -ne 1) {
+            throw "An adjacent directory sharing the blacklist path prefix was incorrectly blocked: $path"
+        }
         if ($Denied) {
             if ($result.denied_file.open_succeeded -or $result.denied_file.read_succeeded) { throw "Private fixture was readable: $path" }
             if ($result.denied_file.error -notin @('UnauthorizedAccessException', 'FileNotFoundException', 'DirectoryNotFoundException')) {
@@ -119,9 +122,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Probe build failed.' }
     $probe = Join-Path $probeDirectory 'DiskGuardRuntimeProbe.exe'
     $privateDirectory = Join-Path $EvidenceDirectory 'private'
+    $siblingDirectory = $privateDirectory + 'Sibling'
     $resultDirectory = Join-Path $EvidenceDirectory 'results'
-    New-Item -ItemType Directory -Path $privateDirectory, $resultDirectory | Out-Null
+    New-Item -ItemType Directory -Path $privateDirectory, $siblingDirectory, $resultDirectory | Out-Null
     Set-Content -LiteralPath (Join-Path $privateDirectory 'private.txt') -Value 'private-fixture' -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $siblingDirectory 'public.txt') -Value 'sibling-fixture' -Encoding utf8
     $allowedFile = Join-Path $EvidenceDirectory 'allowed.txt'
     Set-Content -LiteralPath $allowedFile -Value 'allowed-fixture' -Encoding utf8
     $baseline = Join-Path $resultDirectory 'baseline.json'
@@ -132,15 +137,28 @@ try {
     Set-VerifiedSetting -Name 'Enabled' -Values @('y')
     Set-VerifiedSetting -Name 'FileRootPath' -Values @((Join-Path $EvidenceDirectory 'sandbox'))
     Set-VerifiedSetting -Name 'FileTrace' -Values @('ad')
-    Set-VerifiedSetting -Name 'ClosedFilePath' -Values @($privateDirectory, "$privateDirectory\*")
     Set-VerifiedSetting -Name 'OpenFilePath' -Values @($resultDirectory, "$resultDirectory\*")
+
+    $monitorOnly = Join-Path $resultDirectory 'monitor-only-launch.json'
+    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $monitorOnly)
+    Assert-Probe -ResultPath $monitorOnly -ExpectedBox $sandboxName -Denied $false
+
+    Set-VerifiedSetting -Name 'ClosedFilePath' -Values @("|$privateDirectory", "$privateDirectory\*")
 
     $explicit = Join-Path $resultDirectory 'explicit-launch.json'
     Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $explicit)
     Assert-Probe -ResultPath $explicit -ExpectedBox $sandboxName -Denied $true
 
-    Set-VerifiedSetting -Name 'ForceProcess' -Values @($probe)
-    Set-VerifiedSetting -Name 'ForceChildren' -Values @($probe)
+    Set-VerifiedSetting -Name 'ClosedFilePath' -Values @()
+    $disabledRules = Join-Path $resultDirectory 'disabled-rules-launch.json'
+    Invoke-ProcessChecked -Path $sandboxStart -Arguments @("/box:$sandboxName", '/silent', '/wait', $probe, $privateDirectory, $allowedFile, $disabledRules)
+    Assert-Probe -ResultPath $disabledRules -ExpectedBox $sandboxName -Denied $false
+    Set-VerifiedSetting -Name 'ClosedFilePath' -Values @("|$privateDirectory", "$privateDirectory\*")
+
+    # Upstream treats a full path without a wildcard as a folder; a trailing
+    # wildcard selects its full-path pattern matcher for this dedicated probe.
+    Set-VerifiedSetting -Name 'ForceProcess' -Values @("$probe*")
+    Set-VerifiedSetting -Name 'ForceChildren' -Values @("$probe*")
     $forced = Join-Path $resultDirectory 'forced-launch.json'
     Invoke-ProcessChecked -Path $probe -Arguments @($privateDirectory, $allowedFile, $forced)
     Assert-Probe -ResultPath $forced -ExpectedBox $sandboxName -Denied $true
@@ -157,5 +175,5 @@ finally {
     }
     finally { Stop-Transcript | Out-Null }
 }
-'PASS: baseline, denied open/read, private enumeration concealment, allowed read, explicit launch, forced launch, child association and test configuration cleanup.' | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'RESULT.txt') -Encoding utf8
+'PASS: baseline, monitor-only, deny rules, disabled rules, denied open/read, private enumeration concealment, allowed and sibling-prefix reads, explicit launch, forced launch, child association and test configuration cleanup.' | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'RESULT.txt') -Encoding utf8
 Write-Host "PASS. Evidence retained in $EvidenceDirectory"

@@ -37,13 +37,14 @@ Sandboxie 适配器（Windows x64 FFI）
 | 查询 API 与进程 | [`sbieapi.h`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/core/dll/sbieapi.h) | `SbieApi_GetVersion`、`SbieApi_QueryProcess`、`SbieApi_EnumProcessEx` 等现有导出 |
 | 配置修改 | [`apps/ini/update.c`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/apps/ini/update.c)、[`SbieIniServer.cpp`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/core/svc/SbieIniServer.cpp) | 复用 `SbieDll_UpdateConf`；检查 NTSTATUS，并通过 `SbieApi_QueryConf` 逐项回验。不能把 SbieIni 退出码 0 单独当成功依据 |
 | 禁止目录与例外 | [`drv/file.c`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/core/drv/file.c) | `ClosedFilePath`、`NormalFilePath` 等原生配置；不生成自定义内核规则 |
-| 强制启动与子进程 | [`drv/process_force.c`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/core/drv/process_force.c) | `ForceProcess`、`ForceChildren` 使用完整 EXE 路径，避免仅按 QQ.exe 等文件名误匹配 |
+| 强制启动与子进程 | [`drv/process_force.c`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/core/drv/process_force.c) | `ForceProcess`、`ForceChildren` 使用完整 EXE 路径前缀并附加 `*`，选择原生路径模式匹配器；避免仅按 QQ.exe 等文件名误匹配，同 EXE 路径前缀也可能被匹配 |
 | 显式沙箱启动 | [`apps/Start/start.cpp`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/apps/Start/start.cpp) | 调用现有 `Start.exe /box:...`；不启动 SandMan.exe |
 | 监控数据获取 | [`drv/session.c`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/core/drv/session.c)、[`api_defs.h`](https://github.com/sandboxie-plus/Sandboxie/blob/c3e59fdb18d50199ebfccf7764e1d6c4e007de96/Sandboxie/core/drv/api_defs.h) | `SbieApi_MonitorControl` 与 `API_MONITOR_GET2`，只解码实际返回的记录 |
 
 ## 策略语义与限制
 
 - 黑名单模式把启用的目录规则编译为 `ClosedFilePath`。递归规则覆盖目录本身及后代；非递归规则不声称阻止后代的直接路径访问。
+- 上游文件路径规则会为不含通配符的普通路径自动补 `*`。精确目录规则必须使用内部原生标记 `|D:\Secret`；递归时另加 `D:\Secret\*`，避免错误地同时匹配 `D:\SecretSibling`。此标记由规则编译器生成，用户无需手写。
 - 白名单依赖原生规则优先级：全局关闭匹配与更具体的正常沙箱路径例外必须具有可靠的优先关系。上游 `UseRuleSpecificity` 受有效 `opt_sec` 证书限制；`drv/process.c` 的证书检查会对未获授权的相关高级设置安排 5 分钟后终止进程。应用必须检测并拒绝不满足条件的白名单，不能悄悄写入、试用绕过或声称免费版可完整启用。
 - 白名单通常需要显式允许 Windows、应用安装、配置和数据目录。目录过窄会导致软件启动失败；不存在对任意 EXE 都无影响的通用白名单。
 - 只监控模式不附加用户磁盘拒绝规则；进程仍在 Sandboxie 沙箱内，继续受其文件重定向和其他默认隔离行为影响。
