@@ -14,9 +14,13 @@ Start-Transcript -LiteralPath (Join-Path $logsDirectory 'build-transcript.txt') 
 function Invoke-Checked {
     param([string]$Executable, [string[]]$Arguments)
     Write-Host ("Running {0} {1}" -f $Executable, ($Arguments -join ' '))
-    & $Executable @Arguments
+    $script:commandIndex++
+    $commandLog = Join-Path $logsDirectory ('{0:D2}-{1}.txt' -f $script:commandIndex, [IO.Path]::GetFileNameWithoutExtension($Executable))
+    & $Executable @Arguments 2>&1 | Tee-Object -FilePath $commandLog
     if ($LASTEXITCODE -ne 0) { throw "$Executable failed with exit code $LASTEXITCODE" }
 }
+
+$script:commandIndex = 0
 
 try {
     Push-Location $projectRoot
