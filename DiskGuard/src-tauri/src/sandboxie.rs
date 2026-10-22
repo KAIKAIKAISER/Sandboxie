@@ -18,6 +18,8 @@ pub struct RuntimeStatus {
     pub monitoring: bool,
     pub security_features_available: bool,
     pub force_rules_disabled: bool,
+    pub session_leader_pid: Option<u32>,
+    pub session_leader_image: Option<String>,
     pub error: Option<String>,
 }
 
@@ -43,6 +45,18 @@ pub struct MonitorRecord {
 }
 
 const FILETIME_EPOCH: u64 = 116_444_736_000_000_000;
+const MONITOR_NOT_READY: &str = "Logging is unavailable because Sandboxie did not activate its session monitor. An existing trusted Sandboxie session agent is required. This controller does not launch an old UI or bypass signature checks; disk protection remains available. Start the installed official Classic session agent through the runtime if logging is needed.";
+
+fn verify_monitor_readback(enabled: bool, actual: u32) -> Result<(), String> {
+    if actual == u32::from(enabled) {
+        return Ok(());
+    }
+    Err(if enabled {
+        MONITOR_NOT_READY.into()
+    } else {
+        "Sandboxie did not confirm that the session monitor stopped".into()
+    })
+}
 const MANAGED_KEYS: &[&str] = &[
     "Enabled",
     "ConfigLevel",
@@ -351,6 +365,7 @@ mod platform {
         },
         LibraryLoader::{LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32},
         Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ},
+        RemoteDesktop::ProcessIdToSessionId,
         Services::{
             CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus,
             SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS,
@@ -376,6 +391,7 @@ mod platform {
         unsafe extern "system" fn(u16, *const u16, *const u16, *const u16, *const u16) -> u32;
     type ReloadConf = unsafe extern "system" fn(u32, u32) -> i32;
     type QueryDrvInfo = unsafe extern "system" fn(u32, *mut c_void, u32) -> i32;
+    type SessionLeader = unsafe extern "system" fn(u32, *mut *mut c_void) -> i32;
 
     pub struct Runtime {
         _library: Library,
@@ -390,8 +406,10 @@ mod platform {
         reload_conf: ReloadConf,
         query_driver_info: QueryDrvInfo,
         disable_force: MonitorControl,
+        session_leader: SessionLeader,
         owns_monitor: bool,
         monitor_requested: bool,
+        monitor_error: Option<String>,
         buffer: Vec<u8>,
     }
 
@@ -540,10 +558,12 @@ mod platform {
                     reload_conf: symbol!("SbieApi_ReloadConf", ReloadConf),
                     query_driver_info: symbol!("SbieApi_QueryDrvInfo", QueryDrvInfo),
                     disable_force: symbol!("SbieApi_DisableForceProcess", MonitorControl),
+                    session_leader: symbol!("SbieApi_SessionLeader", SessionLeader),
                     _library: library,
                     install,
                     owns_monitor: false,
                     monitor_requested: false,
+                    monitor_error: None,
                     buffer: vec![0; 1_048_576],
                 };
                 let status = runtime.status();
@@ -563,6 +583,7 @@ mod platform {
             let mut features = 0u32;
             let service = service_running();
             let mut errors = Vec::new();
+            let mut logging_errors = Vec::new();
             unsafe {
                 if let Err(e) = nt_check(
                     (self.get_version)(version.as_mut_ptr()),
@@ -574,7 +595,7 @@ mod platform {
                     (self.monitor_control)(ptr::null(), &mut monitoring),
                     "Query monitor",
                 ) {
-                    errors.push(e);
+                    logging_errors.push(e);
                 }
                 if let Err(e) = nt_check(
                     (self.disable_force)(ptr::null(), &mut force_disabled),
@@ -593,9 +614,23 @@ mod platform {
                 errors.push("Sandboxie SbieSvc service is not running".into());
             }
             let available = errors.is_empty();
+            let (session_leader_pid, session_leader_image) = match self.session_leader_info() {
+                Ok(info) => info,
+                Err(error) => {
+                    logging_errors.push(error);
+                    (None, None)
+                }
+            };
             if monitoring != 0 && !self.owns_monitor {
-                errors.push("Another Sandboxie monitor is active in this Windows session; DiskGuard logging has not acquired its shared queue".into());
+                logging_errors.push("Another Sandboxie monitor is active in this Windows session; DiskGuard logging has not acquired its shared queue".into());
+            } else if self.monitor_requested && monitoring == 0 {
+                logging_errors.push(
+                    self.monitor_error
+                        .clone()
+                        .unwrap_or_else(|| MONITOR_NOT_READY.into()),
+                );
             }
+            errors.extend(logging_errors);
             let version = unwide(&version);
             RuntimeStatus {
                 available,
@@ -605,21 +640,90 @@ mod platform {
                 monitoring: self.owns_monitor && monitoring != 0,
                 force_rules_disabled: force_disabled != 0,
                 security_features_available: features & 0x8000_0040 == 0x8000_0040,
+                session_leader_pid,
+                session_leader_image,
                 error: (!errors.is_empty()).then(|| errors.join("; ")),
             }
         }
 
-        pub fn set_monitoring(&mut self, enabled: bool) -> Result<(), String> {
-            self.monitor_requested = enabled;
+        fn session_leader_info(&self) -> Result<(Option<u32>, Option<String>), String> {
+            let mut session = 0u32;
+            if unsafe { ProcessIdToSessionId(std::process::id(), &mut session) } == 0 {
+                return Err(format!(
+                    "Cannot query current Windows session (error {})",
+                    unsafe { GetLastError() }
+                ));
+            }
+            let mut leader = ptr::null_mut();
+            // A non-null output queries the leader. Never pass a null output:
+            // that is the separate, signature-gated session takeover operation.
+            nt_check(
+                unsafe { (self.session_leader)(session, &mut leader) },
+                "Query trusted Sandboxie session agent",
+            )?;
+            if leader.is_null() {
+                return Ok((None, None));
+            }
+            let pid = leader as usize as u32;
+            let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+            if handle.is_null() {
+                return Ok((Some(pid), None));
+            }
+            let mut image = vec![0u16; 32_768];
+            let mut length = image.len() as u32;
+            let queried =
+                unsafe { QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length) };
+            unsafe {
+                CloseHandle(handle);
+            }
+            let image = (queried != 0).then(|| String::from_utf16_lossy(&image[..length as usize]));
+            Ok((Some(pid), image))
+        }
+
+        fn try_enable_monitor(&mut self) -> Result<bool, String> {
             let mut current = 0;
             nt_check(
                 unsafe { (self.monitor_control)(ptr::null(), &mut current) },
                 "Query monitor state",
             )?;
-            if enabled && !self.owns_monitor && current != 0 {
-                return Err("A Sandboxie monitor is already active in this Windows session. Close its trace monitor before starting DiskGuard logging; the runtime has one shared destructive queue".into());
+            if !self.owns_monitor && current != 0 {
+                self.monitor_error = Some("Another Sandboxie monitor is active in this Windows session; close its trace monitor before DiskGuard can collect logs".into());
+                return Ok(false);
             }
-            if !enabled && !self.owns_monitor {
+            let flag = 1u32;
+            nt_check(
+                unsafe { (self.monitor_control)(&flag, ptr::null_mut()) },
+                "Enable Sandboxie monitor",
+            )?;
+            let mut actual = 0;
+            nt_check(
+                unsafe { (self.monitor_control)(ptr::null(), &mut actual) },
+                "Verify Sandboxie monitor activation",
+            )?;
+            if let Err(error) = verify_monitor_readback(true, actual) {
+                self.owns_monitor = false;
+                self.monitor_error = Some(error);
+                return Ok(false);
+            }
+            self.owns_monitor = true;
+            self.monitor_error = None;
+            Ok(true)
+        }
+
+        pub fn set_monitoring(&mut self, enabled: bool) -> Result<(), String> {
+            self.monitor_requested = enabled;
+            if enabled {
+                return if self.try_enable_monitor()? {
+                    Ok(())
+                } else {
+                    Err(self
+                        .monitor_error
+                        .clone()
+                        .unwrap_or_else(|| MONITOR_NOT_READY.into()))
+                };
+            }
+            if !self.owns_monitor {
+                self.monitor_error = None;
                 return Ok(());
             }
             let flag = u32::from(enabled);
@@ -627,24 +731,33 @@ mod platform {
                 unsafe { (self.monitor_control)(&flag, ptr::null_mut()) },
                 "Change Sandboxie monitor state",
             )?;
-            self.owns_monitor = enabled;
+            let mut actual = 0;
+            nt_check(
+                unsafe { (self.monitor_control)(ptr::null(), &mut actual) },
+                "Verify Sandboxie monitor stop",
+            )?;
+            verify_monitor_readback(false, actual)?;
+            self.owns_monitor = false;
+            self.monitor_error = None;
             Ok(())
         }
 
         pub fn poll(&mut self) -> Result<Vec<MonitorRecord>, String> {
-            if !self.owns_monitor {
-                if !self.monitor_requested {
-                    return Ok(Vec::new());
-                }
-                let mut current = 0;
+            if !self.monitor_requested {
+                return Ok(Vec::new());
+            }
+            if self.owns_monitor {
+                let mut actual = 0;
                 nt_check(
-                    unsafe { (self.monitor_control)(ptr::null(), &mut current) },
-                    "Query monitor state",
+                    unsafe { (self.monitor_control)(ptr::null(), &mut actual) },
+                    "Query monitor readiness",
                 )?;
-                if current != 0 {
-                    return Ok(Vec::new());
+                if actual == 0 {
+                    self.owns_monitor = false;
                 }
-                self.set_monitoring(true)?;
+            }
+            if !self.owns_monitor && !self.try_enable_monitor()? {
+                return Ok(Vec::new());
             }
             let mut records = Vec::new();
             // Bound a polling turn so a busy process cannot starve commands.
@@ -1127,6 +1240,8 @@ mod platform {
                 monitoring: false,
                 security_features_available: false,
                 force_rules_disabled: false,
+                session_leader_pid: None,
+                session_leader_image: None,
                 error: Some(ERROR.into()),
             }
         }
@@ -1310,5 +1425,13 @@ mod tests {
         ] {
             assert!(check_intrinsic_whitelist_paths(&[path.into()]).is_err());
         }
+    }
+    #[test]
+    fn monitor_success_requires_confirmed_raw_state() {
+        assert!(verify_monitor_readback(true, 1).is_ok());
+        assert!(verify_monitor_readback(true, 0).is_err());
+        assert!(verify_monitor_readback(true, 2).is_err());
+        assert!(verify_monitor_readback(false, 0).is_ok());
+        assert!(verify_monitor_readback(false, 1).is_err());
     }
 }

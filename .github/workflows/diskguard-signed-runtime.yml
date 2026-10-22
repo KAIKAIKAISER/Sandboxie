@@ -32,20 +32,32 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - name: Capture relevant processes before runtime installation
+        run: ./DiskGuard/scripts/Get-RuntimeProcessEvidence.ps1 -Destination (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/processes-before-install.json')
       - name: Install pinned official runtime after hash and signature verification
         id: install-runtime
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./DiskGuard/scripts/Install-HostedRuntime.ps1
-      - name: Execute real file access and process association tests
-        run: ./DiskGuard/scripts/Test-Runtime.ps1 -AcknowledgeDisposableVm -EvidenceDirectory (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/runtime-results')
+      - name: Capture relevant processes after runtime installation
+        if: always()
+        run: ./DiskGuard/scripts/Get-RuntimeProcessEvidence.ps1 -Destination (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/processes-after-install.json')
+      - name: Capture the cold session before native application tests
+        if: always() && steps['install-runtime'].outcome == 'success' && inputs.build_run_id != ''
+        run: ./DiskGuard/scripts/Get-RuntimeProcessEvidence.ps1 -Destination (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/processes-before-native.json')
       - name: Execute the built application's actual Sandboxie adapter
         if: always() && steps['install-runtime'].outcome == 'success' && inputs.build_run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: ./DiskGuard/scripts/Test-BuiltAdapter.ps1 -BuildRunId $env:BUILD_RUN_ID
+        run: ./DiskGuard/scripts/Test-BuiltAdapter.ps1 -BuildRunId $env:BUILD_RUN_ID -VerifyColdSession
+      - name: Capture relevant processes after native application tests
+        if: always() && steps['install-runtime'].outcome == 'success' && inputs.build_run_id != ''
+        run: ./DiskGuard/scripts/Get-RuntimeProcessEvidence.ps1 -Destination (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/processes-after-native.json')
+      - name: Execute real file access and process association tests
+        if: always() && steps['install-runtime'].outcome == 'success'
+        run: ./DiskGuard/scripts/Test-Runtime.ps1 -AcknowledgeDisposableVm -EvidenceDirectory (Join-Path $env:GITHUB_WORKSPACE 'DiskGuard/work/hosted-runtime/runtime-results')
       - name: Collect actual driver/service diagnostics
         if: always()
         run: |

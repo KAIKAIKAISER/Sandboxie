@@ -39,6 +39,8 @@ struct Status {
     monitoring: bool,
     security_features_available: bool,
     force_rules_disabled: bool,
+    session_leader_pid: Option<u32>,
+    session_leader_image: Option<String>,
 }
 impl Status {
     fn unavailable(message: impl Into<String>) -> Self {
@@ -52,6 +54,8 @@ impl Status {
             monitoring: false,
             security_features_available: false,
             force_rules_disabled: false,
+            session_leader_pid: None,
+            session_leader_image: None,
         }
     }
     fn from_runtime(r: RuntimeStatus) -> Self {
@@ -61,7 +65,8 @@ impl Status {
                 "Sandboxie 强制沙箱规则已被全局禁用，自动保护失效。请在 Sandboxie 中恢复后重试。".into()
             } else { "运行时已连接；沙箱策略在应用后持久生效，日志仅在此界面运行时采集。".into() }),
             monitor_supported: r.available, monitoring: r.monitoring,
-            security_features_available: r.security_features_available, force_rules_disabled: r.force_rules_disabled }
+            security_features_available: r.security_features_available, force_rules_disabled: r.force_rules_disabled,
+            session_leader_pid: r.session_leader_pid, session_leader_image: r.session_leader_image }
     }
 }
 
@@ -343,20 +348,27 @@ fn runtime_status(state: State<'_, Arc<Backend>>) -> Status {
     state.view().runtime
 }
 #[tauri::command]
-fn frontend_ready(app: tauri::AppHandle) -> Result<(), String> {
+async fn frontend_ready(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<Backend>>,
+) -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     if let Some(index) = args.iter().position(|arg| arg == "--ui-smoke-test") {
-        let path = Path::new(
+        let path = PathBuf::from(
             args.get(index + 1)
                 .ok_or("UI smoke test output path missing")?,
         );
         if !path.is_absolute() {
             return Err("UI smoke test output must be an absolute path".into());
         }
-        store::write_json(
-            path,
-            &serde_json::json!({"success":true,"frontend_initialized":true,"backend_invoked":true}),
-        )?;
+        let backend = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            for _ in 0..50 {
+                if backend.view().runtime.driver_available { break; }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            store::write_json(&path, &serde_json::json!({"success":true,"frontend_initialized":true,"backend_invoked":true,"runtime":backend.view().runtime}))
+        }).await.map_err(|e| e.to_string())??;
         app.exit(0);
     }
     Ok(())
@@ -504,15 +516,54 @@ fn set_autostart(
     })
 }
 
+/// Verify that a missing trusted logging session cannot disable policy writes.
+fn monitor_unavailable_diagnostics(destination: &str) -> bool {
+    let mut report = serde_json::json!({"success":false,"enforcement_available":false,"monitor_unavailable":false,"policy_roundtrip":false,"status":null,"error":null});
+    let outcome = (|| -> Result<(), String> {
+        let mut runtime = Runtime::connect()?;
+        let activation_error = runtime.set_monitoring(true).err();
+        let status = runtime.status();
+        report["status"] = serde_json::to_value(&status).map_err(|e| e.to_string())?;
+        report["enforcement_available"] = status.available.into();
+        report["monitor_unavailable"] = (!status.monitoring && activation_error.is_some()).into();
+        report["activation_notice"] =
+            serde_json::to_value(activation_error).map_err(|e| e.to_string())?;
+        if !status.available || status.monitoring || status.session_leader_pid.is_some() {
+            return Err("The disposable test did not establish an available driver with an absent trusted logging session".into());
+        }
+        let mut app = ManagedApp::preset("cold", "Cold session diagnostics");
+        app.sandbox = format!("DiskGuard_Cold_{}", std::process::id());
+        app.executable = format!(
+            "{}\\System32\\cmd.exe",
+            std::env::var("SystemRoot").map_err(|e| e.to_string())?
+        );
+        app.enabled = true;
+        app.auto_protect = false;
+        app.include_children = false;
+        app.mode = Mode::Monitor;
+        runtime.apply_policy(&policy::compile(&app)?)?;
+        runtime.remove_policy(&app.sandbox)?;
+        report["policy_roundtrip"] = true.into();
+        report["success"] = true.into();
+        Ok(())
+    })();
+    if let Err(error) = outcome {
+        report["error"] = error.into();
+    }
+    let success = report["success"] == true;
+    store::write_json(Path::new(destination), &report).is_ok() && success
+}
+
 /// Headless adapter smoke test for the disposable CI VM. It exercises this
 /// binary's exact ABI/config/monitor code, not a parallel mock implementation.
 fn runtime_diagnostics(destination: &str) -> bool {
     let mut report = serde_json::json!({"success":false,"status":null,"monitor_enabled":false,"poll_ok":false,"records":0,"error":null});
     let outcome = (|| -> Result<(), String> {
         let mut runtime = Runtime::connect()?;
-        report["status"] = serde_json::to_value(runtime.status()).map_err(|e| e.to_string())?;
-        runtime.set_monitoring(true)?;
-        report["monitor_enabled"] = true.into();
+        report["initial_status"] =
+            serde_json::to_value(runtime.status()).map_err(|e| e.to_string())?;
+        report["activation_notice"] =
+            serde_json::to_value(runtime.set_monitoring(true).err()).map_err(|e| e.to_string())?;
         let mut app = ManagedApp::preset("diag", "Adapter diagnostics");
         app.sandbox = format!("DiskGuard_Diag_{}", std::process::id());
         app.executable = format!(
@@ -525,23 +576,52 @@ fn runtime_diagnostics(destination: &str) -> bool {
         app.mode = Mode::Monitor;
         runtime.apply_policy(&policy::compile(&app)?)?;
         let result = (|| -> Result<(), String> {
+            let probe_command =
+                ["dir %SystemRoot% > nul & ping -n 2 127.0.0.1 > nul"; 10].join(" & ");
             runtime.launch(
                 &app.sandbox,
                 &app.executable,
-                &["/d".into(), "/c".into(), "dir %SystemRoot% > nul".into()],
+                &["/d".into(), "/c".into(), probe_command],
             )?;
-            let mut records = Vec::new();
-            for _ in 0..30 {
-                records.extend(runtime.poll()?);
+            let mut total_records = 0u64;
+            let mut attributed_records = 0u64;
+            let mut sample = Vec::new();
+            let mut attribution_sample = Vec::new();
+            for turn in 0..150 {
+                for record in runtime.poll()? {
+                    total_records += 1;
+                    if sample.len() < 10 {
+                        sample.push(record.clone());
+                    }
+                    if record.box_name.eq_ignore_ascii_case(&app.sandbox)
+                        && !record.process_name.is_empty()
+                        && !record.path.is_empty()
+                        && record.pid != 0
+                        && record.operation == "file_open"
+                    {
+                        attributed_records += 1;
+                        if attribution_sample.len() < 10 {
+                            attribution_sample.push(record);
+                        }
+                    }
+                }
+                if turn >= 30 && attributed_records > 0 {
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(100));
             }
             report["poll_ok"] = true.into();
-            report["records"] = records.len().into();
-            report["sample"] = serde_json::to_value(records.iter().take(10).collect::<Vec<_>>())
-                .map_err(|e| e.to_string())?;
-            if records.is_empty() {
+            report["records"] = total_records.into();
+            report["attributed_records"] = attributed_records.into();
+            report["sample"] = serde_json::to_value(sample).map_err(|e| e.to_string())?;
+            report["attribution_sample"] =
+                serde_json::to_value(attribution_sample).map_err(|e| e.to_string())?;
+            let status = runtime.status();
+            report["monitor_enabled"] = status.monitoring.into();
+            report["status"] = serde_json::to_value(status).map_err(|e| e.to_string())?;
+            if attributed_records == 0 {
                 return Err(
-                    "No real monitor events were received during the sandboxed file access probe"
+                    "No real file-open event could be attributed to the live diagnostic sandbox process"
                         .into(),
                 );
             }
@@ -550,7 +630,7 @@ fn runtime_diagnostics(destination: &str) -> bool {
         // A short-lived helper may still be exiting; retry cleanup without
         // killing any process or deleting sandbox contents.
         let mut cleanup = runtime.remove_policy(&app.sandbox);
-        for _ in 0..30 {
+        for _ in 0..150 {
             if cleanup.is_ok() {
                 break;
             }
@@ -575,6 +655,21 @@ fn runtime_diagnostics(destination: &str) -> bool {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "--monitor-unavailable-diagnostics")
+    {
+        std::process::exit(
+            if args
+                .get(2)
+                .is_some_and(|path| monitor_unavailable_diagnostics(path))
+            {
+                0
+            } else {
+                1
+            },
+        );
+    }
     if args
         .get(1)
         .is_some_and(|arg| arg == "--runtime-diagnostics")
