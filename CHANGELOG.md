@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## DiskGuard downstream 0.2.1
+
+- Increase interface typography to readable sizes, including navigation, actions, status messages, forms and logs. Use a shared relative type scale and improve secondary text contrast.
+- Reflow narrow application panels, rules, filters and dialogs as text grows. Capture cloud browser previews for visual review at desktop window sizes.
+
 ## DiskGuard downstream 0.2.0
 
 - Bundle the unmodified official signed Sandboxie Classic x64 runtime installer. Verify its pinned SHA-256 and Windows trust before standard UAC installation, preserve existing runtimes, and report cancellation, failures, and restart requirements.

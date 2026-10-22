@@ -63,6 +63,22 @@ jobs:
           }
       - name: Validate, test and package the independent UI
         run: ./DiskGuard/scripts/Build.ps1
+      - name: Capture frontend pages for font and layout review
+        run: |
+          npm install --prefix DiskGuard/work/ui-review --no-save --package-lock=false --no-audit --no-fund playwright@1.56.1
+          if ($LASTEXITCODE -ne 0) { throw 'Visual review tooling installation failed' }
+          node DiskGuard/work/ui-review/node_modules/playwright/cli.js install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Visual review browser installation failed' }
+          node DiskGuard/scripts/Capture-UiReview.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Visual review capture failed' }
+      - name: Upload frontend review screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskguard-ui-review-${{ github.sha }}
+          path: DiskGuard/work/ui-review-captures/**
+          if-no-files-found: warn
+          retention-days: 30
       - name: Compile the isolated VM probe (does not execute a driver test)
         run: |
           dotnet build DiskGuard/scripts/probe/RuntimeProbe.csproj --configuration Release --nologo 2>&1 | Tee-Object -FilePath DiskGuard/build-logs/runtime-probe-build.txt

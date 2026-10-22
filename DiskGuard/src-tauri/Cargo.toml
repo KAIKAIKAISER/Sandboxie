@@ -1,6 +1,6 @@
 [package]
 name = "diskguard"
-version = "0.2.0"
+version = "0.2.1"
 description = "Independent Tauri controller for the Sandboxie runtime"
 authors = ["DiskGuard contributors"]
 edition = "2021"
