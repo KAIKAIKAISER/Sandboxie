@@ -4,9 +4,11 @@
 
 `.github/workflows/diskguard.yml` 仅在 Fork 中运行，使用 `windows-2022`、Node 22、Rust stable/MSVC x64 和 .NET 8。提交 `DiskGuard/` 或该 workflow 的变更会触发构建；也支持 Actions 页手动运行。`diskguard-v<version>` 标签必须与 Tauri 版本完全一致，构建成功后上传 GitHub Release。
 
-构建执行 `npm ci`、前端编译、可用的前端测试、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked --all-targets` 以及 Tauri NSIS 打包。独立运行时测试探针只进行编译，不在 hosted runner 上安装驱动或执行内核测试。
+构建先按锁文件下载官方 Classic x64 安装器，要求 SHA-256 匹配且 Authenticode Valid，然后执行 `npm ci`、前端编译、可用的前端测试、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked --all-targets` 以及 Tauri NSIS 打包。构建任务仅打包官方安装器，不在该构建机安装驱动；驱动部署与行为验证由独立的一次性 VM 任务执行。
 
-成功产物包括 x64 NSIS 安装包、便携 UI ZIP、`BUILD-MANIFEST.json` 与 `SHA256SUMS.txt`。构建 transcript 包含工具版本和编译输出，失败时也尝试上传单独日志 Artifact。GitHub Actions 的任务日志是开始执行脚本之前发生故障时的诊断来源。Release 作业仅在标签推送时获取 `contents: write`；普通构建使用只读仓库权限。
+成功产物包括集成官方运行时的 x64 NSIS 安装包、便携 ZIP、`BUILD-MANIFEST.json` 与 `SHA256SUMS.txt`。构建 transcript 包含工具版本和编译输出，失败时也尝试上传单独日志 Artifact。GitHub Actions 的任务日志是开始执行脚本之前发生故障时的诊断来源。Release 作业仅在标签推送时获取 `contents: write`；普通构建使用只读仓库权限。
+
+0.2.0 的 Push/手动/标签构建在编译完成后调用 `diskguard-integrated-runtime.yml`，分别使用全新 Windows Server 2022 VM 验证安装包与便携包。安装包测试只启动 DiskGuard setup，由其 POSTINSTALL 自动部署缺失运行时；便携包测试使用与界面按钮共用的原生安装函数。探针不会预先安装 Sandboxie 或代替产品启动缺失服务。需验证官方签名、实际驱动/服务可用、重复安装不改变运行时二进制/配置/服务进程、原生 UI 与适配器以及真实访问阻断。便携测试另要求损坏资源副本被拒绝且不注册驱动或服务。两项都通过后标签作业才发布 Release；PR 仅执行普通编译，不部署驱动。交互式 UAC 接受/拒绝仍需客户端验收。
 
 独立的 `diskguard-signed-runtime.yml` 支持手动设置 `run_signed_runtime_tests=true`，在一次性 GitHub hosted Windows Server 2022 VM 上执行真实运行时探针。它按 `scripts/runtime.lock.json` 固定官方 Classic 5.73.8（发布标签 v1.18.8）及 SHA256，安装前要求哈希匹配且 Authenticode 信任状态为 Valid，随后要求服务与驱动运行，并执行文件访问、强制启动和子进程探针。不会改变 Windows 驱动签名配置，也不会在本地开发机安装。若 hosted 环境无法加载签名驱动，此任务明确失败并上传系统事件，不能转为“跳过即通过”。该结果属于 Server 2022，不能替代下表的 Windows 10/11 客户端验收。
 

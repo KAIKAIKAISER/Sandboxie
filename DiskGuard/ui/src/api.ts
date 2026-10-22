@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { AppState, Config, LogFilter, LogResponse, RuntimeStatus } from './types';
+import type { AppState, Config, LogFilter, LogResponse, RuntimeInstallation, RuntimeInstallResult, RuntimeStatus } from './types';
 
 export const nativeAvailable = isTauri();
 
@@ -18,6 +18,8 @@ export const api = {
   getLogs: (filter: LogFilter) => command<LogResponse>('get_logs', { filter }),
   exportLogs: (filter: LogFilter, destination: string) => command<{ path: string; count: number }>('export_logs', { filter, destination }),
   runtimeStatus: () => command<RuntimeStatus>('runtime_status'),
+  runtimeInstallation: () => command<RuntimeInstallation>('get_runtime_installation'),
+  installRuntime: () => command<RuntimeInstallResult>('install_bundled_runtime'),
   setAutostart: (enabled: boolean) => command<void>('set_autostart', { enabled }),
   chooseExecutable: async () => {
     if (!nativeAvailable) throw new Error('选择程序需要在 Windows 桌面程序中操作。');

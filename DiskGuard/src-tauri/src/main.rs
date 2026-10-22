@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod runtime_install;
+
 use chrono::{DateTime, Utc};
 use diskguard::{
     model::*,
@@ -348,6 +350,49 @@ fn runtime_status(state: State<'_, Arc<Backend>>) -> Status {
     state.view().runtime
 }
 #[tauri::command]
+async fn get_runtime_installation(
+    app: tauri::AppHandle,
+) -> Result<runtime_install::RuntimeInstallation, String> {
+    let roots = runtime_install::resource_roots(app.path().resource_dir().ok());
+    tauri::async_runtime::spawn_blocking(move || runtime_install::status(&roots))
+        .await
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+async fn install_bundled_runtime(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<Backend>>,
+) -> Result<runtime_install::InstallResult, String> {
+    let roots = runtime_install::resource_roots(app.path().resource_dir().ok());
+    let backend = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _mutation = backend.mutation.lock().map_err(|_| "后台状态锁错误")?;
+        let result = runtime_install::install(&roots);
+        // Refresh the actual driver connection even after partial failure;
+        // never infer runtime availability from an installer exit code alone.
+        let mut runtime = backend.runtime.lock().map_err(|_| "运行时锁错误")?;
+        if runtime.is_none() {
+            match Runtime::connect() {
+                Ok(mut connected) => {
+                    let _ = connected.set_monitoring(true);
+                    *runtime = Some(connected);
+                }
+                Err(error) => {
+                    backend.inner.lock().map_err(|_| "配置锁错误")?.runtime =
+                        Status::unavailable(error);
+                }
+            }
+        }
+        if let Some(connected) = runtime.as_ref() {
+            backend.inner.lock().map_err(|_| "配置锁错误")?.runtime =
+                Status::from_runtime(connected.status());
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 async fn frontend_ready(
     app: tauri::AppHandle,
     state: State<'_, Arc<Backend>>,
@@ -653,8 +698,45 @@ fn runtime_diagnostics(destination: &str) -> bool {
     success
 }
 
+fn install_runtime_cli(args: &[String]) -> i32 {
+    let report = match &args[2..] {
+        [] => None,
+        [flag, path] if flag == "--report" => {
+            let path = PathBuf::from(path);
+            if !path.is_absolute()
+                || !path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                eprintln!("--report requires an absolute JSON file path");
+                return 1;
+            }
+            Some(path)
+        }
+        _ => {
+            eprintln!("Usage: DiskGuard.exe --install-bundled-runtime [--report ABSOLUTE.json]");
+            return 1;
+        }
+    };
+    let result = runtime_install::install(&runtime_install::resource_roots(None))
+        .unwrap_or_else(runtime_install::InstallResult::failure);
+    if let Some(path) = report {
+        if let Err(error) = store::write_json(&path, &result) {
+            eprintln!("Cannot write runtime installation report: {error}");
+            return 1;
+        }
+    }
+    result.process_exit_code()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "--install-bundled-runtime")
+    {
+        std::process::exit(install_runtime_cli(&args));
+    }
     if args
         .get(1)
         .is_some_and(|arg| arg == "--monitor-unavailable-diagnostics")
@@ -771,6 +853,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             runtime_status,
+            get_runtime_installation,
+            install_bundled_runtime,
             save_config,
             apply_policy,
             launch_app,

@@ -1,0 +1,88 @@
+name: DiskGuard integrated runtime installation
+
+on:
+  workflow_call:
+    inputs:
+      build_run_id:
+        description: DiskGuard Windows x64 build run containing the integrated installer and portable package
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful DiskGuard Windows x64 build run containing the integrated installer and portable package
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  integrated-runtime:
+    if: github.repository != 'sandboxie-plus/Sandboxie'
+    strategy:
+      fail-fast: false
+      matrix:
+        package_mode: [installer, portable]
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install the DiskGuard package on a fresh VM and verify its bundled official runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          PACKAGE_MODE: ${{ matrix.package_mode }}
+        run: ./DiskGuard/scripts/Test-IntegratedRuntime.ps1 -BuildRunId $env:BUILD_RUN_ID -PackageMode $env:PACKAGE_MODE
+      - name: Collect driver and process diagnostics even on failure
+        if: always()
+        env:
+          PACKAGE_MODE: ${{ matrix.package_mode }}
+        run: |
+          $directory = Join-Path $env:GITHUB_WORKSPACE "DiskGuard/work/integrated-runtime-$env:PACKAGE_MODE"
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          ./DiskGuard/scripts/Get-RuntimeProcessEvidence.ps1 -Destination (Join-Path $directory 'processes-final.json')
+          Get-CimInstance Win32_SystemDriver -Filter "Name='SbieDrv'" | Select-Object Name, State, Status, StartMode, PathName | ConvertTo-Json | Set-Content (Join-Path $directory 'driver-final.json')
+          Get-CimInstance Win32_Service -Filter "Name='SbieSvc'" | Select-Object Name, State, Status, StartMode, PathName | ConvertTo-Json | Set-Content (Join-Path $directory 'service-final.json')
+          foreach ($log in @('System', 'Application', 'Microsoft-Windows-CodeIntegrity/Operational')) {
+            $name = $log -replace '[^A-Za-z0-9]', '-'
+            Get-WinEvent -FilterHashtable @{LogName=$log; StartTime=(Get-Date).AddMinutes(-30); Level=1,2,3} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, ProviderName, Message | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $directory "$name-events.json")
+          }
+          $nativeReceipt = Join-Path $env:LOCALAPPDATA 'DiskGuard/runtime-install.json'
+          if (Test-Path -LiteralPath $nativeReceipt) { Copy-Item -LiteralPath $nativeReceipt -Destination (Join-Path $directory 'native-last-install-report.json') }
+      - name: Upload actual installation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskguard-integrated-${{ matrix.package_mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/*.json
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/*.jsonl
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/*.txt
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/enforcement/*.json
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/enforcement/*.jsonl
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/enforcement/*.txt
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/enforcement/results/*.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: State the precise verification scope
+        if: always()
+        run: |
+          @'
+          ## Integrated runtime installation
+          Each matrix job starts on a fresh Windows Server 2022 hosted VM without Sandboxie.
+          The installer job launches only DiskGuard setup; the portable job invokes its bundled native runtime installer.
+          The test never preinstalls Sandboxie or starts missing runtime services itself.
+          A pass requires trusted official runtime deployment, preserved existing binaries/configuration on repeat, native UI/adapter checks and actual file access probes.
+          Driver signature enforcement is unchanged. Interactive UAC acceptance and Windows 10/11 client compatibility require separate validation.
+          '@ >> $env:GITHUB_STEP_SUMMARY

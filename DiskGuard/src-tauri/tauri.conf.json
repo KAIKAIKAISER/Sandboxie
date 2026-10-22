@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DiskGuard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "io.diskguard.desktop",
   "build": {
     "beforeDevCommand": "npm --prefix ui run dev",
@@ -20,9 +20,9 @@
     "license": "GPL-3.0-or-later",
     "licenseFile": "../LICENSE",
     "homepage": "https://github.com/KAIKAIKAISER/Sandboxie/tree/diskguard/DiskGuard",
-    "resources": {"../LICENSE":"LICENSE.txt","../THIRD-PARTY-NOTICES.md":"THIRD-PARTY-NOTICES.md","../docs/RUNTIME.md":"README-runtime.md"},
+    "resources": {"../LICENSE":"LICENSE.txt","../THIRD-PARTY-NOTICES.md":"THIRD-PARTY-NOTICES.md","../docs/RUNTIME.md":"README-runtime.md","../runtime/Sandboxie-Classic-x64-v5.73.8.exe":"runtime/Sandboxie-Classic-x64-v5.73.8.exe","../runtime/runtime.lock.json":"runtime/runtime.lock.json","../runtime/NOTICE.md":"runtime/NOTICE.md"},
     "shortDescription": "Sandboxie runtime disk access controller",
     "copyright": "GPL-3.0-or-later · DiskGuard contributors",
-    "windows": {"webviewInstallMode":{"type":"downloadBootstrapper"},"nsis":{"installMode":"currentUser","languages":["SimpChinese","English"],"displayLanguageSelector":true}}
+    "windows": {"webviewInstallMode":{"type":"downloadBootstrapper"},"nsis":{"installMode":"currentUser","languages":["SimpChinese","English"],"displayLanguageSelector":true,"installerHooks":"../installer/runtime-hooks.nsh"}}
   }
 }

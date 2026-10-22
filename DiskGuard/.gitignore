@@ -10,3 +10,6 @@
 /work/
 /scripts/probe/bin/
 /scripts/probe/obj/
+/runtime/*.exe
+/runtime/*.download
+/runtime/runtime.lock.json

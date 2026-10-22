@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: diskguard-${{ github.workflow }}-${{ github.ref }}
@@ -86,15 +87,22 @@ jobs:
         run: |
           @'
           ## DiskGuard validation scope
-          This job compiles the Rust/Tauri UI, runs its unit tests, and packages x64 NSIS/portable UI artifacts.
-          No Sandboxie driver is built, installed, test-signed, or loaded on this hosted runner.
-          Real access-control validation requires the opt-in disposable-VM procedure in DiskGuard/docs/VALIDATION.md.
+          This job compiles the Rust/Tauri UI, runs its unit tests, and packages the pinned official runtime with x64 NSIS/portable artifacts.
+          SHA-256 and Authenticode are checked before bundling. No Sandboxie driver is built, installed, test-signed, or loaded on this build runner.
+          Separate clean-machine jobs validate integrated installation and real access control before tagged release publication.
           The UI executables are unsigned unless a separate publisher signing process is added.
           '@ >> $env:GITHUB_STEP_SUMMARY
 
+  bundled-runtime:
+    if: github.repository != 'sandboxie-plus/Sandboxie' && github.event_name != 'pull_request'
+    needs: build
+    uses: ./.github/workflows/diskguard-integrated-runtime.yml
+    with:
+      build_run_id: '${{ github.run_id }}'
+
   release:
     if: startsWith(github.ref, 'refs/tags/diskguard-v') && github.event_name == 'push'
-    needs: build
+    needs: [build, bundled-runtime]
     runs-on: windows-2022
     timeout-minutes: 10
     permissions:
@@ -115,10 +123,13 @@ jobs:
           $notes = @'
           Independent Rust + Tauri 2 DiskGuard UI for Windows 10/11 x64.
 
-          Requires a separately installed official, Windows-signed Sandboxie runtime and Microsoft Edge WebView2.
-          The portable ZIP contains the UI only: the kernel driver and service are system-installed prerequisites.
-          No kernel driver or original Qt UI is bundled. Windows driver signing enforcement must remain enabled.
-          The application binaries are unsigned. This build does not constitute completed VM enforcement validation.
+          Includes the unmodified official signed Sandboxie Classic x64 5.73.8 installer.
+          The setup package installs a missing runtime through normal Windows administrator authorization; portable users can select Install bundled runtime in the application.
+          Existing runtimes are preserved. Microsoft Edge WebView2 is also required; setup installs it if needed.
+          The upstream driver is not rebuilt or re-signed. Windows driver signing enforcement remains enabled. No Qt UI is included.
+          Clean-machine installer and portable deployment checks must pass before this release job can run.
+          Complete corresponding runtime source: https://github.com/sandboxie-plus/Sandboxie/archive/refs/tags/v1.18.8.zip
+          The DiskGuard application binaries are unsigned. Windows Server cloud tests do not establish Windows 10/11 or QQ/WeChat business compatibility.
           See BUILD-MANIFEST.json, SHA256SUMS.txt and the source documentation for exact build and test scope.
           '@
           $notes | Set-Content -LiteralPath release-notes.md -Encoding utf8

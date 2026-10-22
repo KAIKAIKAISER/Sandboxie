@@ -89,7 +89,7 @@ try {
     $downloadDirectory = Join-Path $evidenceDirectory 'ui-artifact'
     & gh run download $BuildRunId --repo $env:GH_REPO --pattern 'diskguard-windows-x64-*' --dir $downloadDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Unable to download requested UI build artifact.' }
-    $packages = @(Get-ChildItem -LiteralPath $downloadDirectory -Recurse -Filter '*-portable-ui.zip' -File)
+    $packages = @(Get-ChildItem -LiteralPath $downloadDirectory -Recurse -Filter '*-portable*.zip' -File)
     if ($packages.Count -ne 1) { throw 'Expected exactly one portable UI package.' }
     $extractDirectory = Join-Path $evidenceDirectory 'ui-extracted'
     Expand-Archive -LiteralPath $packages[0].FullName -DestinationPath $extractDirectory

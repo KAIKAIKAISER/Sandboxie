@@ -29,6 +29,7 @@ try {
         Invoke-Checked 'npm' @('--version')
         Invoke-Checked 'rustc' @('--version')
         Invoke-Checked 'cargo' @('--version')
+        Invoke-Checked 'pwsh' @('-NoProfile', '-File', 'scripts/Get-BundledRuntime.ps1')
         Invoke-Checked 'npm' @('--prefix', 'ui', 'ci', '--no-audit', '--no-fund')
         Invoke-Checked 'npm' @('--prefix', 'ui', 'run', 'build')
         Invoke-Checked 'npm' @('--prefix', 'ui', 'run', 'test', '--if-present')
@@ -43,7 +44,7 @@ try {
         $releaseDirectory = Join-Path $projectRoot 'src-tauri/target/x86_64-pc-windows-msvc/release'
         $application = Join-Path $releaseDirectory "$binaryName.exe"
         if (-not (Test-Path -LiteralPath $application)) { throw "Missing built application: $application" }
-        $installers = @(Get-ChildItem -LiteralPath (Join-Path $releaseDirectory 'bundle/nsis') -Filter '*-setup.exe' -File)
+        $installers = @(Get-ChildItem -LiteralPath (Join-Path $releaseDirectory 'bundle/nsis') -Filter "*_${version}_x64-setup.exe" -File)
         if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS x64 installer' }
         Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $distributionDirectory "DiskGuard_${version}_x64-setup.exe")
 
@@ -55,7 +56,12 @@ try {
         if (Test-Path -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md')) {
             Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destination $portableDirectory
         }
-        Compress-Archive -LiteralPath @(Get-ChildItem -LiteralPath $portableDirectory -File | ForEach-Object { $_.FullName }) -DestinationPath (Join-Path $distributionDirectory "DiskGuard_${version}_windows-x64-portable-ui.zip") -Force
+        $portableRuntime = Join-Path $portableDirectory 'runtime'
+        New-Item -ItemType Directory -Path $portableRuntime -Force | Out-Null
+        foreach ($runtimeFile in @('runtime.lock.json', 'NOTICE.md', 'Sandboxie-Classic-x64-v5.73.8.exe')) {
+            Copy-Item -LiteralPath (Join-Path $projectRoot "runtime/$runtimeFile") -Destination $portableRuntime -Force
+        }
+        Compress-Archive -LiteralPath @(Get-ChildItem -LiteralPath $portableDirectory | ForEach-Object { $_.FullName }) -DestinationPath (Join-Path $distributionDirectory "DiskGuard_${version}_windows-x64-portable.zip") -Force
 
         $sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0) { throw 'Unable to identify source commit' }
@@ -69,7 +75,11 @@ try {
             node = (& node --version | Out-String).Trim()
             rustc = (& rustc --version | Out-String).Trim()
             app_authenticode = (Get-AuthenticodeSignature -LiteralPath $application).Status.ToString()
-            runtime_bundled = $false
+            runtime_bundled = $true
+            runtime_version = '5.73.8'
+            runtime_installer_sha256 = (Get-Content -LiteralPath 'scripts/runtime.lock.json' -Raw | ConvertFrom-Json).sha256
+            runtime_installer_authenticode = (Get-AuthenticodeSignature -LiteralPath 'runtime/Sandboxie-Classic-x64-v5.73.8.exe').Status.ToString()
+            runtime_source_archive = 'https://github.com/sandboxie-plus/Sandboxie/archive/refs/tags/v1.18.8.zip'
             kernel_driver_built = $false
             driver_test_signing_enabled = $false
             hosted_ci_scope = 'frontend build; Rust format/clippy/unit tests; NSIS and portable UI packaging'

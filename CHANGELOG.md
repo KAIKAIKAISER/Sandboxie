@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## DiskGuard downstream 0.2.0
+
+- Bundle the unmodified official signed Sandboxie Classic x64 runtime installer. Verify its pinned SHA-256 and Windows trust before standard UAC installation, preserve existing runtimes, and report cancellation, failures, and restart requirements.
+- Integrate runtime deployment into the DiskGuard installer and add an installation action for the portable application. Keep the shared runtime when uninstalling DiskGuard.
+- Verify clean-machine installer and portable deployment in separate Windows cloud VMs before publishing tagged releases. Preserve driver signing enforcement and upstream core code.
+
 ## DiskGuard downstream 0.1.0
 
 - Add an independent Windows x64 Rust/Tauri controller under `DiskGuard/`, with per-application Sandboxie policies, native runtime monitoring, tray and autostart support.

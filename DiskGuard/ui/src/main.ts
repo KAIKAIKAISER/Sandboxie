@@ -1,6 +1,6 @@
 import './style.css';
 import { api, nativeAvailable } from './api';
-import type { AppState, Config, LogEntry, LogFilter, LogResponse, ManagedApp, Page, PolicyMode, Rule, RuntimeStatus, Theme } from './types';
+import type { AppState, Config, LogEntry, LogFilter, LogResponse, ManagedApp, Page, PolicyMode, Rule, RuntimeInstallation, Theme } from './types';
 
 const icons: Record<string, string> = {
   shield: '<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8.5 11.5 2.5 2.5 4.5-5"/>',
@@ -53,6 +53,9 @@ let busy = false;
 let loading = nativeAvailable;
 let configurationReady = !nativeAvailable;
 let loadError = '';
+let runtimeInstallation: RuntimeInstallation | null = null;
+let installationError = '';
+let installingRuntime = false;
 let persistedConfig = structuredClone(emptyConfig);
 let logs: LogResponse = { entries: [], notice: '尚未接收运行时事件。' };
 let logFilter: LogFilter = { search: '', appId: '', result: '', operation: '' };
@@ -124,7 +127,7 @@ function render() {
       <div class="brand"><span class="brand-symbol">${icon('shield', 26)}</span><div>DiskGuard<span>应用磁盘访问控制</span></div></div>
       <div class="nav-label">工作空间</div>
       <nav aria-label="主导航">${nav.map(item => `<button class="nav-item ${page === item.id ? 'active' : ''}" data-page="${item.id}" ${page === item.id ? 'aria-current="page"' : ''}>${icon(item.icon)}<span>${item.label}</span>${item.id === 'apps' && state.config.apps.length ? `<b>${state.config.apps.length}</b>` : ''}${page === item.id ? '<span class="nav-mark"></span>' : ''}</button>`).join('')}</nav>
-      <div class="sidebar-bottom"><div class="engine-label"><span class="status-dot ${runtimeReady() ? 'good' : 'warning'}"></span><span>Sandboxie 引擎</span>${icon('shield', 15)}</div><p>${runtimeReady() ? '驱动与服务已连接' : '等待运行时连接'}</p><div class="sidebar-version">DiskGuard <span>v0.1.0</span></div></div>
+      <div class="sidebar-bottom"><div class="engine-label"><span class="status-dot ${runtimeReady() ? 'good' : 'warning'}"></span><span>Sandboxie 引擎</span>${icon('shield', 15)}</div><p>${runtimeReady() ? '驱动与服务已连接' : '等待运行时连接'}</p><div class="sidebar-version">DiskGuard <span>v0.2.0</span></div></div>
     </aside>
     <main class="main-content">
       <header class="topbar"><div class="breadcrumbs">工作空间 ${icon('arrow', 12)} <span>${titles[page][0]}</span></div><div class="topbar-right"><span class="local-tag">${icon('lock', 13)}本地运行</span><span class="topbar-divider"></span><button class="icon-button" data-action="theme-cycle" aria-label="切换深浅色主题" title="切换深浅色主题">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 18)}</button></div></header>
@@ -142,12 +145,27 @@ function dashboardView() {
   return `<section class="hero"><div class="hero-text"><div class="hero-kicker"><span class="tiny-line"></span>明确边界，安心使用</div><h2>把应用的访问范围，<br>掌握在自己手中。</h2><p>独立沙箱、目录策略与真实访问日志。<br>从一个应用开始，为私人文件留出空间。</p><button class="button hero-button" data-page="apps">管理我的应用 ${icon('arrow', 16)}</button></div><div class="hero-art" aria-hidden="true"><div class="orbital orbit-one"></div><div class="orbital orbit-two"></div><div class="art-spark spark-one">+</div><div class="art-spark spark-two">+</div><div class="floating-file file-one">${icon('folder', 26)}<span></span><span></span></div><div class="floating-file file-two">${icon('logs', 25)}<span></span></div><div class="shield-object">${icon('shield', 99)}</div><div class="art-caption">YOUR FILES. YOUR RULES.</div></div></section>
     <section class="stat-grid" aria-label="配置统计"><div class="stat-card"><span class="stat-icon purple">${icon('apps', 21)}</span><div><span>已添加应用</span><strong>${apps.length}<small>个</small></strong></div><span class="stat-note">独立沙箱配置</span></div><div class="stat-card"><span class="stat-icon teal">${icon('folder', 21)}</span><div><span>已启用目录规则</span><strong>${ruleCount}<small>条</small></strong></div><span class="stat-note">${apps.filter(app => app.enabled).length} 个应用启用策略</span></div><div class="stat-card"><span class="stat-icon amber">${icon('logs', 21)}</span><div><span>当前日志结果</span><strong>${logs.entries.length}<small>条</small></strong></div><span class="stat-note">最近一次筛选结果</span></div></section>
     <div class="dashboard-columns"><section class="panel apps-panel"><div class="panel-heading"><div><h3>我的应用 <span class="count-label">${apps.length}</span></h3><p>按应用管理，策略彼此独立</p></div><button class="text-button" data-page="apps">查看全部 ${icon('arrow', 13)}</button></div>${apps.length ? `<div class="dashboard-apps">${apps.slice(0, 4).map(app => `<button class="dashboard-app" data-action="select-app" data-id="${escape(app.id)}">${appIcon(app)}<div><strong>${escape(app.name)}</strong><span>${escape(app.sandbox)}</span></div>${policyStatus(app)}${icon('arrow', 15)}</button>`).join('')}</div>` : `<div class="empty-apps"><div class="empty-graphic">${icon('apps', 31)}</div><h4>还没有添加应用</h4><p>选择一个实际安装的 EXE，开始配置访问边界。</p><div class="preset-buttons"><button class="button secondary" data-action="add-preset" data-preset="QQ">${icon('qq', 17)}添加 QQ</button><button class="button secondary" data-action="add-preset" data-preset="微信">${icon('wechat', 18)}添加微信</button></div></div>`}</section>
-    <section class="panel runtime-panel"><div class="panel-heading"><div><h3>运行时状态</h3><p>安全能力来自实际连接的组件</p></div><button class="icon-button" data-action="refresh-runtime" title="重新检测运行时" aria-label="重新检测运行时">${icon('refresh', 17)}</button></div><div class="runtime-rows">${runtimeRow('Sandboxie 驱动', state.runtime.driverAvailable, '已连接', '未检测到')}${runtimeRow('Sandboxie 服务', state.runtime.serviceRunning, '运行中', '未连接')}${runtimeRow('访问事件监控', state.runtime.monitoring, '监控中', state.runtime.monitorSupported ? '等待事件' : '不可用')}</div><div class="runtime-note">${icon('info', 16)}<span>${escape(state.runtime.message)}</span></div>${lastRefresh ? `<div class="last-checked">上次检测 ${escape(lastRefresh)}</div>` : ''}</section></div>
+    <section class="panel runtime-panel"><div class="panel-heading"><div><h3>运行时状态</h3><p>安全能力来自实际连接的组件</p></div><button class="icon-button" data-action="refresh-runtime" title="重新检测运行时" aria-label="重新检测运行时">${icon('refresh', 17)}</button></div><div class="runtime-rows">${runtimeRow('Sandboxie 驱动', state.runtime.driverAvailable, '已连接', '未检测到')}${runtimeRow('Sandboxie 服务', state.runtime.serviceRunning, '运行中', '未连接')}${runtimeRow('访问事件监控', state.runtime.monitoring, '监控中', state.runtime.monitorSupported ? '等待事件' : '不可用')}</div>${runtimeInstallationView()}<div class="runtime-note">${icon('info', 16)}<span>${escape(state.runtime.message)}</span></div>${lastRefresh ? `<div class="last-checked">上次检测 ${escape(lastRefresh)}</div>` : ''}</section></div>
     <aside class="info-strip">${icon('eye', 20)}<div><strong>看清每一次访问的含义</strong><p>日志按运行时来源标识文件打开与策略检查。当前接口不提供独立目录枚举或实际读取事件。</p></div><button class="text-button" data-page="logs">查看日志 ${icon('arrow', 14)}</button></aside>`;
 }
 
 function runtimeRow(label: string, good: boolean, goodText: string, badText: string) {
   return `<div class="runtime-row"><span>${label}</span><span class="runtime-value ${good ? 'success-text' : 'muted'}"><i class="status-dot ${good ? 'good' : ''}"></i>${good ? goodText : badText}</span></div>`;
+}
+
+function canInstallBundledRuntime() {
+  return Boolean(runtimeInstallation && !installationError && !runtimeInstallation.installed && runtimeInstallation.bundled && runtimeInstallation.canInstall && !runtimeInstallation.installing && !runtimeInstallation.rebootRequired && !installingRuntime);
+}
+
+function runtimeInstallationView() {
+  if (!nativeAvailable) return '<div class="runtime-installation passive"><p>运行时安装与检测仅在 Windows 桌面程序中可用。</p></div>';
+  if (installationError) return `<div class="runtime-installation warning"><div class="runtime-installation-title">${icon('info', 16)}<strong>无法确认运行时安装状态</strong></div><p>请重新检测后再安装，避免覆盖现有运行时。</p><details><summary>诊断信息</summary><p>${escape(installationError)}</p></details></div>`;
+  if (!runtimeInstallation) return `<div class="runtime-installation passive"><p>${icon('clock', 14)}正在检测运行时安装状态…</p></div>`;
+  const installation = runtimeInstallation;
+  if (installingRuntime || installation.installing) return `<div class="runtime-installation installing" role="status" aria-live="polite"><div class="runtime-installation-title"><span class="progress-spinner"></span><strong>正在安装内置运行时</strong></div><p>正在等待 Windows 管理员授权或安装完成，请保持程序运行。</p></div>`;
+  if (installation.rebootRequired) return `<div class="runtime-installation warning" role="status"><div class="runtime-installation-title">${icon('refresh', 16)}<strong>需要重启 Windows</strong></div><p>${escape(installation.message)}</p><p>请保存工作并重启电脑，然后重新打开 DiskGuard。</p></div>`;
+  if (installation.installed) return `<div class="runtime-installation installed"><div class="runtime-installation-title">${icon('check', 16)}<strong>已检测到 Sandboxie 运行时</strong></div><p>${escape(installation.message)}</p></div>`;
+  return `<div class="runtime-installation ${canInstallBundledRuntime() ? 'available' : 'warning'}"><div class="runtime-installation-title">${icon('shield', 17)}<strong>${canInstallBundledRuntime() ? '安装内置运行时，启用磁盘保护' : '运行时暂不可安装'}</strong></div><p>${escape(installation.message)}</p>${canInstallBundledRuntime() ? `<p>随附 Sandboxie Classic 官方安装包，安装前校验文件与官方签名，无需单独下载。安装时需要 Windows 管理员授权。</p><button class="button primary small" data-action="install-runtime" ${busy ? 'disabled' : ''}>${icon('shield', 15)}安装内置运行时</button>` : ''}</div>`;
 }
 
 function appList() {
@@ -209,7 +227,7 @@ function formatTime(value: string) {
 
 function settingsView() {
   const settings = state.config.settings;
-  return `<div class="settings-layout"><section class="panel"><div class="panel-heading"><div><h3>外观</h3><p>选择适合你的界面主题</p></div>${icon('sun', 20)}</div><div class="theme-options">${(['light', 'dark', 'system'] as Theme[]).map(theme => `<button class="theme-card ${settings.theme === theme ? 'selected' : ''}" data-action="theme" data-theme="${theme}" aria-pressed="${settings.theme === theme}"><div class="theme-preview ${theme}"><i></i><div><span></span><span></span><span></span></div></div><span>${icon(theme === 'light' ? 'sun' : theme === 'dark' ? 'moon' : 'monitor', 16)}${theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}<i class="radio-indicator"></i></span></button>`).join('')}</div></section><section class="panel"><div class="panel-heading"><div><h3>常规</h3><p>窗口与启动方式</p></div>${icon('settings', 20)}</div><div class="setting-row"><div><strong>关闭窗口时最小化到托盘</strong><p>从系统托盘中重新打开界面或退出程序</p></div>${switchControl('close-to-tray', settings.closeToTray, '关闭窗口时最小化到托盘')}</div><div class="setting-row"><div><strong>登录 Windows 时启动</strong><p>为当前用户注册 DiskGuard 开机启动项</p></div>${switchControl('autostart', settings.autostart, '登录 Windows 时启动')}</div></section><section class="panel"><div class="panel-heading"><div><h3>Sandboxie 运行时</h3><p>复用现有驱动、服务与沙箱配置能力</p></div><button class="button secondary small" data-action="refresh-runtime">${icon('refresh', 15)}重新检测</button></div><dl class="runtime-details"><div><dt>安装位置</dt><dd><code>${escape(state.runtime.runtimePath || '尚未检测到')}</code></dd></div><div><dt>运行时版本</dt><dd>${escape(state.runtime.version || '未知')}</dd></div><div><dt>驱动连接</dt><dd>${badge(state.runtime.driverAvailable ? '已连接' : '未连接', state.runtime.driverAvailable ? 'good' : 'neutral')}</dd></div><div><dt>服务状态</dt><dd>${badge(state.runtime.serviceRunning ? '运行中' : '未连接', state.runtime.serviceRunning ? 'good' : 'neutral')}</dd></div><div><dt>监控能力</dt><dd>${state.runtime.monitorSupported ? '支持运行时事件' : '当前不可用'}</dd></div></dl><div class="runtime-note settings-runtime-note">${icon('info', 16)}<span>${escape(state.runtime.message)}</span></div></section><section class="about-card"><span class="brand-symbol">${icon('shield', 26)}</span><div><h3>DiskGuard <span>0.1.0</span></h3><p>轻量界面 · 独立策略 · 本地数据</p><p class="about-footnote">Windows 10 / 11 x64 · Rust + Tauri 2 · Sandboxie</p></div></section></div>`;
+  return `<div class="settings-layout"><section class="panel"><div class="panel-heading"><div><h3>外观</h3><p>选择适合你的界面主题</p></div>${icon('sun', 20)}</div><div class="theme-options">${(['light', 'dark', 'system'] as Theme[]).map(theme => `<button class="theme-card ${settings.theme === theme ? 'selected' : ''}" data-action="theme" data-theme="${theme}" aria-pressed="${settings.theme === theme}"><div class="theme-preview ${theme}"><i></i><div><span></span><span></span><span></span></div></div><span>${icon(theme === 'light' ? 'sun' : theme === 'dark' ? 'moon' : 'monitor', 16)}${theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}<i class="radio-indicator"></i></span></button>`).join('')}</div></section><section class="panel"><div class="panel-heading"><div><h3>常规</h3><p>窗口与启动方式</p></div>${icon('settings', 20)}</div><div class="setting-row"><div><strong>关闭窗口时最小化到托盘</strong><p>从系统托盘中重新打开界面或退出程序</p></div>${switchControl('close-to-tray', settings.closeToTray, '关闭窗口时最小化到托盘')}</div><div class="setting-row"><div><strong>登录 Windows 时启动</strong><p>为当前用户注册 DiskGuard 开机启动项</p></div>${switchControl('autostart', settings.autostart, '登录 Windows 时启动')}</div></section><section class="panel"><div class="panel-heading"><div><h3>Sandboxie 运行时</h3><p>复用现有驱动、服务与沙箱配置能力</p></div><button class="button secondary small" data-action="refresh-runtime">${icon('refresh', 15)}重新检测</button></div>${runtimeInstallationView()}<dl class="runtime-details"><div><dt>安装位置</dt><dd><code>${escape(state.runtime.runtimePath || '尚未检测到')}</code></dd></div><div><dt>运行时版本</dt><dd>${escape(state.runtime.version || '未知')}</dd></div><div><dt>驱动连接</dt><dd>${badge(state.runtime.driverAvailable ? '已连接' : '未连接', state.runtime.driverAvailable ? 'good' : 'neutral')}</dd></div><div><dt>服务状态</dt><dd>${badge(state.runtime.serviceRunning ? '运行中' : '未连接', state.runtime.serviceRunning ? 'good' : 'neutral')}</dd></div><div><dt>监控能力</dt><dd>${state.runtime.monitorSupported ? '支持运行时事件' : '当前不可用'}</dd></div></dl><div class="runtime-note settings-runtime-note">${icon('info', 16)}<span>${escape(state.runtime.message)}</span></div></section><section class="about-card"><span class="brand-symbol">${icon('shield', 26)}</span><div><h3>DiskGuard <span>0.2.0</span></h3><p>轻量界面 · 独立策略 · 本地数据</p><p class="about-footnote">Windows 10 / 11 x64 · Rust + Tauri 2 · Sandboxie</p></div></section></div>`;
 }
 
 function showModal() {
@@ -265,6 +283,7 @@ async function loadState() {
     setTheme(value.config.settings.theme);
     lastRefresh = new Date().toLocaleTimeString('zh-CN', { hour12: false });
     void refreshLogs();
+    void refreshRuntime(true);
   } catch (error) {
     configurationReady = false;
     loadError = String(error);
@@ -284,13 +303,35 @@ function requireConfiguration() {
 }
 
 async function refreshRuntime(silent = false) {
-  try {
-    const updated = await api.runtimeStatus();
-    const changed = JSON.stringify(updated) !== JSON.stringify(state.runtime);
-    state.runtime = updated;
+  const previous = JSON.stringify([state.runtime, runtimeInstallation, installationError]);
+  const [runtime, installation] = await Promise.allSettled([api.runtimeStatus(), api.runtimeInstallation()]);
+  if (runtime.status === 'fulfilled') {
+    state.runtime = runtime.value;
     lastRefresh = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    if (!silent || (changed && !modal && !document.activeElement?.matches('input, select'))) render();
-  } catch (error) { if (!silent) toast(String(error), 'error'); }
+  } else if (!silent) toast(`运行时检测失败：${String(runtime.reason)}`, 'error');
+  if (installation.status === 'fulfilled') {
+    runtimeInstallation = installation.value;
+    installationError = '';
+  } else installationError = String(installation.reason);
+  const changed = previous !== JSON.stringify([state.runtime, runtimeInstallation, installationError]);
+  if (!silent || (changed && !modal && !document.activeElement?.matches('input, select'))) render();
+}
+
+async function installBundledRuntime() {
+  await refreshRuntime(true);
+  if (!canInstallBundledRuntime()) {
+    toast(runtimeInstallation?.message || '尚不能确认可安全安装运行时，请重新检测。', 'info');
+    return;
+  }
+  installingRuntime = true;
+  render();
+  try {
+    const result = await api.installRuntime();
+    toast(result.message, result.outcome === 'failed' ? 'error' : result.outcome === 'cancelled' || result.rebootRequired ? 'info' : 'success');
+  } finally {
+    installingRuntime = false;
+    await refreshRuntime(true);
+  }
 }
 
 async function refreshLogs(showError = false) {
@@ -322,7 +363,7 @@ document.addEventListener('click', async event => {
   const action = target.dataset.action;
   if (action === 'retry-load') { await loadState(); return; }
   if (busy || loading) return;
-  if (!['refresh-runtime', 'refresh-logs', 'close-modal'].includes(action || '') && !requireConfiguration()) return;
+  if (!['refresh-runtime', 'refresh-logs', 'install-runtime', 'close-modal'].includes(action || '') && !requireConfiguration()) return;
   const app = currentApp();
   if (action === 'add-app' || action === 'add-preset') { modal = { type: 'app', preset: target.dataset.preset }; showModal(); }
   else if (action === 'close-modal') { modal = null; showModal(); }
@@ -359,7 +400,8 @@ document.addEventListener('click', async event => {
   }
   else if (action === 'apply' && app) await withBusy(async () => { await saveConfig(); const result = await api.applyPolicy(app.id); toast(result.message || '访问策略已提交到运行时。'); state = await api.getState(); });
   else if (action === 'launch' && app) await withBusy(async () => { await saveConfig(); const result = await api.launchApp(app.id); toast(result.message || '已请求在沙箱中启动应用。'); state = await api.getState(); });
-  else if (action === 'refresh-runtime') await withBusy(() => refreshRuntime(true), '运行时状态已更新。');
+  else if (action === 'refresh-runtime') await withBusy(() => refreshRuntime(false));
+  else if (action === 'install-runtime') await withBusy(installBundledRuntime);
   else if (action === 'refresh-logs') await refreshLogs(true);
   else if (action === 'reset-filters') { logFilter = { search: '', appId: '', result: '', operation: '' }; render(); if (nativeAvailable) void refreshLogs(true); }
   else if (action === 'export-logs') await withBusy(async () => {
@@ -489,4 +531,3 @@ if (nativeAvailable) {
   setInterval(() => { if (!document.hidden && page === 'logs') void refreshLogs(); }, 2500);
   setInterval(() => { if (!document.hidden && !busy) void refreshRuntime(true); }, 15000);
 }
-

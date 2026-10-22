@@ -1,15 +1,17 @@
 # 安装与运行
 
-DiskGuard 面向 Windows 10/11 x64，使用 Rust、Tauri 2 和系统 Microsoft Edge WebView2。它依赖独立安装的 Sandboxie 签名运行时，包括 SbieDrv、SbieSvc、SbieDll.dll 和 Start.exe；不使用或启动原版 Qt 管理界面。
+DiskGuard 面向 Windows 10/11 x64，使用 Rust、Tauri 2 和系统 Microsoft Edge WebView2。0.2.0 起集成未经修改的官方签名 Classic x64 安装器，部署 SbieDrv、SbieSvc、SbieDll.dll 和 Start.exe；不使用或启动原版 Qt 管理界面。
 
 ## 运行前提
 
-1. 从 [Sandboxie 官方 Releases](https://github.com/sandboxie-plus/Sandboxie/releases) 安装适合系统的正式 x64 运行时，保留 Windows 驱动签名强制。按官方安装提示重启。
+1. 使用 DiskGuard 安装包，缺少 Sandboxie 时会自动调用内置运行时安装流程。便携包用户可点击“安装内置运行时”。安装前校验内嵌锁文件固定的 SHA-256 与 Windows Authenticode，再通过标准 UAC 请求管理员权限。安装器来自 [官方 v1.18.8](https://github.com/sandboxie-plus/Sandboxie/releases/tag/v1.18.8)，版本 Classic 5.73.8。保持 Windows 驱动签名强制，按实际提示重启。
 2. 确认 Sandboxie 服务及驱动正常运行。DiskGuard 从系统服务注册表定位安装目录，不接受任意下载目录的 DLL。
-3. 安装 NSIS 软件包，或解压便携 UI ZIP。系统需要 WebView2；安装包可按 Tauri 配置获取引导安装器，便携 UI 需要系统已有 WebView2。
+3. 系统需要 WebView2；DiskGuard 安装包可按 Tauri 配置获取引导安装器，便携版需要系统已有 WebView2。运行时安装器已经在包内，无需再下载 Sandboxie。
 4. 如现有 Sandboxie 配置限制配置写入、监控或要求管理员，按系统已有权限机制授权运行。应用不会绕过配置密码或服务权限。
 
-“便携版”指 UI 可解压运行。驱动和服务仍需系统安装；这不是可在无管理员、无驱动系统上独立生效的便携安全产品。
+“便携版”指 UI 可解压运行，包含 `runtime/` 安装资源。驱动和服务仍需系统安装并获得管理员授权。不要只复制 EXE；请保留整个目录。已存在的 Classic 或 Plus 安装不自动覆盖、修复或降级，异常安装需用其官方安装程序修复。取消 UAC、签名无效、资源缺失或安装失败会返回明确错误。
+
+卸载 DiskGuard 保留共享运行时、已有沙箱及其数据。对应官方运行时的完整源代码、构建文件、版权及许可证链接见包内 `runtime/NOTICE.md`；上游源代码归档为 https://github.com/sandboxie-plus/Sandboxie/archive/refs/tags/v1.18.8.zip 。
 
 ## 使用顺序
 
@@ -29,6 +31,6 @@ DiskGuard 面向 Windows 10/11 x64，使用 Rust、Tauri 2 和系统 Microsoft E
 
 ## 签名与发布
 
-本项目的默认 CI 只构建普通用户态应用，默认应用二进制未进行 Authenticode 签名，Windows 可能显示未知发布者。它不构建、不重新签署也不捆绑内核驱动。正式驱动必须来自符合 Windows 签名要求的发行版；任何测试签名驱动只能在明确隔离的测试机上通过受支持流程使用，不能作为正式发行的替代品。
+本项目的默认构建 CI 只编译普通用户态应用，默认 DiskGuard 二进制未进行 Authenticode 签名，Windows 可能显示未知发布者。内置的官方安装器保持原样，驱动由其官方签名包部署；不自行构建或重新签署驱动，不修改签名检查设置。任何测试签名驱动只能在明确隔离的测试机上通过受支持流程使用，不能作为正式发行的替代品。
 
 以 `BUILD-MANIFEST.json` 中实际记录的应用签名状态、构建提交和验证范围为准。GitHub Actions 构建成功只表示构建、静态检查和单元测试通过，不表示已在 Windows 10/11 上完成访问控制、QQ/微信兼容性或系统稳定性验收。真实验收步骤见 [VALIDATION.md](VALIDATION.md)。

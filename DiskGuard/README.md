@@ -4,10 +4,12 @@
 
 ## 安装与运行
 
-1. 从 [Sandboxie 官方发布](https://github.com/sandboxie-plus/Sandboxie/releases) 安装具有有效 Windows 驱动签名的 x64 Sandboxie Classic 或 Plus 运行时。可使用 Classic 安装包，不需要 Qt。保持 Windows 驱动签名强制检查启用。
-2. 安装 DiskGuard NSIS 包或解压便携 UI ZIP。便携包仅包含 UI；驱动与服务仍需系统安装。Windows 10 需要 Microsoft Edge WebView2（安装包会按需安装）。
+1. 安装 DiskGuard NSIS 包。0.2.0 起内置未经修改的官方签名 Classic x64 5.73.8 安装器：缺少运行时时，安装流程验证固定 SHA-256 与 Authenticode，再通过 Windows UAC 请求管理员权限部署驱动和服务，无需另行下载。提示需要重启时按提示操作，保持驱动签名强制检查启用。
+2. 也可解压便携包，打开 DiskGuard 后点击“安装内置运行时”。便携包包含安装器，但驱动与服务仍须获得管理员授权安装到系统。已有 Classic/Plus 安装会保留，不自动替换或降级；异常安装应使用其官方安装程序修复。系统需要 Microsoft Edge WebView2（DiskGuard 安装包会按需安装）。
 3. 在软件页为 QQ、微信预设选择实际 EXE，或添加任意 EXE。每个软件使用独立 `DiskGuard_` 沙箱。
 4. 保存配置并应用策略，再从界面启动。普通权限无法修改受保护的 Sandboxie 配置时，会返回实际错误；按运行时管理策略使用相应权限。
+
+运行时安装取消或失败会显示真实结果，可在界面重试。卸载 DiskGuard 不会移除可能被其他软件使用的共享 Sandboxie 运行时或沙箱数据。官方安装器来源、哈希及对应完整源码见 [运行时声明](runtime/NOTICE.md) 和 [锁文件](scripts/runtime.lock.json)。
 
 ## 已实现的行为与边界
 
@@ -37,11 +39,11 @@
 
 - Push/PR 修改 DiskGuard 时构建，支持手动触发。
 - `diskguard-v<版本>` 标签构建并发布 GitHub Release；标签必须与 `tauri.conf.json` 版本匹配。
-- Artifacts 包含 x64 NSIS 安装包、便携 UI ZIP、SHA-256、构建清单及构建日志。
+- Artifacts 包含集成官方签名运行时的 x64 NSIS 安装包、便携 ZIP、SHA-256、构建清单及构建日志。构建时固定下载、验证并原样打包官方安装器；不会在构建机部署驱动。
 - 不重编译或分发自签内核驱动，不改变 Windows 签名要求。UI 本身尚未使用发布者代码签名，Windows 可能显示未知发布者。
 - 编译通过不等于真实驱动验证通过。详见 [验证说明](docs/VALIDATION.md) 与独立签名运行时测试工作流。
 
-本地开发（可选）：Node.js 22、Rust stable、MSVC C++ Build Tools 和 Windows SDK；`cd DiskGuard/ui && npm ci`，然后在 `DiskGuard/` 运行 `node ui/node_modules/@tauri-apps/cli/tauri.js dev`。正式构建使用 `scripts/Build.ps1`。优先由 GitHub Windows runner 安装工具链并执行构建。
+本地开发（可选）：Node.js 22、Rust stable、MSVC C++ Build Tools 和 Windows SDK；先运行 `DiskGuard/scripts/Get-BundledRuntime.ps1`（仅下载与验证，不安装），再执行 `cd DiskGuard/ui && npm ci`，然后在 `DiskGuard/` 运行 `node ui/node_modules/@tauri-apps/cli/tauri.js dev`。正式构建使用 `scripts/Build.ps1`。优先由 GitHub Windows runner 安装工具链并执行构建。
 
 ## 架构与许可证
 

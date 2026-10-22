@@ -39,6 +39,24 @@ export interface RuntimeStatus {
   forceRulesDisabled: boolean;
 }
 
+export interface RuntimeInstallation {
+  installed: boolean;
+  bundled: boolean;
+  installing: boolean;
+  rebootRequired: boolean;
+  message: string;
+  canInstall: boolean;
+}
+
+export interface RuntimeInstallResult {
+  outcome: 'installed' | 'rebootRequired' | 'alreadyInstalled' | 'cancelled' | 'failed';
+  message: string;
+  exitCode: number | null;
+  runtimeVersion: string;
+  driverAvailable: boolean;
+  rebootRequired: boolean;
+}
+
 export interface LogEntry {
   id: number;
   timestamp: string;
