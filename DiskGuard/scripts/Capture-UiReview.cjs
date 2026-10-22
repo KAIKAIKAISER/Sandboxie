@@ -35,7 +35,8 @@ const { chromium } = require(path.join(project, 'work/ui-review/node_modules/pla
         await page.locator('.hero').waitFor();
         const capture = async name => {
           await page.evaluate(() => document.fonts.ready);
-          await page.screenshot({ path: path.join(output, `${theme}-${width}-${name}.png`), fullPage: true });
+          await page.screenshot({ path: path.join(output, `${theme}-${width}-${name}.png`),
+            fullPage: !name.endsWith('dialog'), animations: 'disabled' });
           measurements.push(await page.evaluate(({ theme, width, name }) => {
             const fonts = [...document.querySelectorAll('body *')].filter(e =>
               e.getClientRects().length && [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()))
@@ -48,6 +49,11 @@ const { chromium } = require(path.join(project, 'work/ui-review/node_modules/pla
           }, { theme, width, name }));
         };
         await capture('overview');
+        if (theme === 'light' && width === 1000) {
+          const scale = await page.addStyleTag({ content: ':root { font-size: 200%; }' });
+          await capture('overview-text-200');
+          await scale.evaluate(element => element.remove());
+        }
         if (width !== 1920) {
           await page.locator('[data-action="add-app"]').first().click();
           await capture('add-application-dialog');
