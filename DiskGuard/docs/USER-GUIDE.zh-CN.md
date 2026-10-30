@@ -6,7 +6,7 @@
 
 1. 从本 Fork 的 [Releases](https://github.com/KAIKAIKAISER/Sandboxie/releases) 下载完整安装包或便携 ZIP，勿只复制 EXE。核对同一版本的 `SHA256SUMS.txt` 和 `BUILD-MANIFEST.json`：
    ```powershell
-   Get-FileHash .\DiskGuard_0.2.1_x64-setup.exe -Algorithm SHA256
+   Get-FileHash .\DiskGuard_0.2.2_x64-setup.exe -Algorithm SHA256
    ```
    把结果与校验文件逐字符比较。校验值与下载文件来自同一站点，并不能代替可信发布者签名。
 2. DiskGuard 自身当前未取得发布者代码签名，可能显示“未知发布者”或 SmartScreen 提醒。不能据此宣称文件安全；来源或校验不符时停止，不要关闭 SmartScreen、驱动签名强制或安全启动。

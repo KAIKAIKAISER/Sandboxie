@@ -2,7 +2,7 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
-## DiskGuard downstream (Unreleased)
+## DiskGuard downstream 0.2.2 (Pre-release) - 2026-10-30
 
 - Add actual product-backend policy VM probes, required frontend regression tests and layout assertions; retain independent upstream enforcement probes.
 - Update the locked Tokio dependency from 1.54.0 to 1.54.1 for RUSTSEC-2026-0384.
