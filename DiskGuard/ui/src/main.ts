@@ -1,5 +1,6 @@
 import './style.css';
 import { api, nativeAvailable } from './api';
+import { nativeMessages } from './native-messages';
 import type { AppState, Config, LogEntry, LogFilter, LogResponse, ManagedApp, Page, PolicyMode, Rule, RuntimeInstallation, Theme } from './types';
 
 const icons: Record<string, string> = {
@@ -68,7 +69,7 @@ const modalRoot = document.querySelector<HTMLDivElement>('#modal-root')!;
 
 const currentApp = () => state.config.apps.find(app => app.id === currentAppId) ?? state.config.apps[0];
 const runtimeReady = () => state.runtime.driverAvailable && state.runtime.serviceRunning;
-const policyBadge = (app: ManagedApp) => JSON.stringify(app) !== JSON.stringify(persistedConfig.apps.find(saved => saved.id === app.id)) ? badge('待保存', 'purple-tone') : !app.enabled ? badge('配置停用') : state.pendingAppIds.includes(app.id) ? badge('待应用', 'purple-tone') : state.appliedAppIds.includes(app.id) ? badge('策略已写入', 'good') : badge('尚未应用');
+const policyBadge = (app: ManagedApp) => !configurationReady ? badge('状态待恢复', 'danger') : JSON.stringify(app) !== JSON.stringify(persistedConfig.apps.find(saved => saved.id === app.id)) ? badge('待保存', 'purple-tone') : !app.enabled ? badge('配置停用') : state.pendingAppIds.includes(app.id) ? badge('待应用', 'purple-tone') : state.appliedAppIds.includes(app.id) ? badge('策略已写入', 'good') : badge('尚未应用');
 const policyStatus = (app: ManagedApp) => `<span class="policy-state" data-app-id="${escape(app.id)}">${policyBadge(app)}</span>`;
 const appIcon = (app: Pick<ManagedApp, 'name'>, big = false) => {
   const kind = /微信|wechat|weixin/i.test(app.name) ? 'wechat' : /^qq|腾讯qq/i.test(app.name) ? 'qq' : 'apps';
@@ -132,11 +133,14 @@ function render() {
     <main class="main-content">
       <header class="topbar"><div class="breadcrumbs">工作空间 ${icon('arrow', 12)} <span>${titles[page][0]}</span></div><div class="topbar-right"><span class="local-tag">${icon('lock', 13)}本地运行</span><span class="topbar-divider"></span><button class="icon-button" data-action="theme-cycle" aria-label="切换深浅色主题" title="切换深浅色主题">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 18)}</button></div></header>
       <div class="page-body"><div class="page-heading"><div><div class="eyebrow">${page === 'dashboard' ? 'YOUR DIGITAL BOUNDARIES' : 'DISKGUARD WORKSPACE'}</div><h1>${titles[page][0]}</h1><p>${titles[page][1]}</p></div><div class="heading-actions">${page === 'logs' ? `<button class="button secondary" data-action="export-logs" ${busy ? 'disabled' : ''}>${icon('download', 16)}导出日志</button>` : page === 'dashboard' || page === 'apps' ? `<button class="button secondary" data-action="add-app">${icon('plus', 17)}添加应用</button>` : ''}<button class="button primary" data-action="save" data-save ${!dirty || busy ? 'disabled' : ''}>${icon('disk', 16)}${dirty ? '保存更改<span class="unsaved-dot"></span>' : '已保存'}</button></div></div>
-      ${loadError ? `<aside class="load-error" role="alert">${icon('info', 18)}<div><strong>配置尚未载入，编辑暂不可用</strong><p>${escape(loadError)}</p></div><button class="button secondary small" data-action="retry-load">重新载入</button></aside>` : ''}
-      ${page === 'dashboard' ? dashboardView() : page === 'apps' ? appsView() : page === 'rules' ? rulesView() : page === 'logs' ? logsView() : settingsView()}
+      ${loadError ? `<aside class="load-error" role="alert">${icon('info', 18)}<div><strong>配置只读：需要恢复或重新载入</strong><p>${escape(loadError)}</p><p>目录：<code>${escape(state.configurationDirectory || '请查看系统应用配置目录')}</code>。请先备份整个目录，勿删除沙箱数据。</p></div><button class="button secondary small" data-action="retry-load">恢复保存 / 重新载入</button></aside>` : ''}
+      ${page === 'dashboard' ? dashboardView() : page === 'apps' ? appsView() : page === 'rules' ? rulesView() : page === 'logs' ? logsView() : settingsView() + nativeMessageGuide()}
       <footer class="page-footer"><span>${icon('shield', 13)}基于 Sandboxie 开源沙箱能力</span><span class="save-state">${dirty ? '有未保存的更改' : '配置保存在本机'}</span></footer></div>
     </main></div>`;
   root.inert = busy || loading;
+  if (!configurationReady) {
+    root.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input[data-field], input[data-action], button[data-save], button[data-action="apply"], button[data-action="launch"]').forEach(control => { control.disabled = true; });
+  }
 }
 
 function dashboardView() {
@@ -230,6 +234,10 @@ function settingsView() {
   return `<div class="settings-layout"><section class="panel"><div class="panel-heading"><div><h3>外观</h3><p>选择适合你的界面主题</p></div>${icon('sun', 20)}</div><div class="theme-options">${(['light', 'dark', 'system'] as Theme[]).map(theme => `<button class="theme-card ${settings.theme === theme ? 'selected' : ''}" data-action="theme" data-theme="${theme}" aria-pressed="${settings.theme === theme}"><div class="theme-preview ${theme}"><i></i><div><span></span><span></span><span></span></div></div><span>${icon(theme === 'light' ? 'sun' : theme === 'dark' ? 'moon' : 'monitor', 16)}${theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}<i class="radio-indicator"></i></span></button>`).join('')}</div></section><section class="panel"><div class="panel-heading"><div><h3>常规</h3><p>窗口与启动方式</p></div>${icon('settings', 20)}</div><div class="setting-row"><div><strong>关闭窗口时最小化到托盘</strong><p>从系统托盘中重新打开界面或退出程序</p></div>${switchControl('close-to-tray', settings.closeToTray, '关闭窗口时最小化到托盘')}</div><div class="setting-row"><div><strong>登录 Windows 时启动</strong><p>为当前用户注册 DiskGuard 开机启动项</p></div>${switchControl('autostart', settings.autostart, '登录 Windows 时启动')}</div></section><section class="panel"><div class="panel-heading"><div><h3>Sandboxie 运行时</h3><p>复用现有驱动、服务与沙箱配置能力</p></div><button class="button secondary small" data-action="refresh-runtime">${icon('refresh', 15)}重新检测</button></div>${runtimeInstallationView()}<dl class="runtime-details"><div><dt>安装位置</dt><dd><code>${escape(state.runtime.runtimePath || '尚未检测到')}</code></dd></div><div><dt>运行时版本</dt><dd>${escape(state.runtime.version || '未知')}</dd></div><div><dt>驱动连接</dt><dd>${badge(state.runtime.driverAvailable ? '已连接' : '未连接', state.runtime.driverAvailable ? 'good' : 'neutral')}</dd></div><div><dt>服务状态</dt><dd>${badge(state.runtime.serviceRunning ? '运行中' : '未连接', state.runtime.serviceRunning ? 'good' : 'neutral')}</dd></div><div><dt>监控能力</dt><dd>${state.runtime.monitorSupported ? '支持运行时事件' : '当前不可用'}</dd></div></dl><div class="runtime-note settings-runtime-note">${icon('info', 16)}<span>${escape(state.runtime.message)}</span></div></section><section class="about-card"><span class="brand-symbol">${icon('shield', 26)}</span><div><h3>DiskGuard <span>0.2.1</span></h3><p>轻量界面 · 独立策略 · 本地数据</p><p class="about-footnote">Windows 10 / 11 x64 · Rust + Tauri 2 · Sandboxie</p></div></section></div>`;
 }
 
+function nativeMessageGuide() {
+  return `<section class="panel"><div class="panel-heading"><div><h3>Sandboxie 原生提示速查</h3><p>以下是说明索引，不是当前系统告警，也不代表已采集到这些事件。</p></div></div><details><summary>查看 SBIE 消息与处理建议</summary><dl class="runtime-details">${nativeMessages.map(item => `<div><dt>${item.code}</dt><dd><strong>${escape(item.meaning)}</strong><p>${escape(item.action)}</p></dd></div>`).join('')}</dl><p>完整指南随安装包提供：USER-GUIDE.zh-CN.md。保留原始编号、错误码和消息全文后再排查；不要隐藏原生安全警告。</p></details></section>`;
+}
+
 function showModal() {
   if (!modal) { modalRoot.innerHTML = ''; return; }
   let content = '';
@@ -265,7 +273,20 @@ async function withBusy(action: () => Promise<void>, success?: string) {
   modalRoot.inert = true;
   root.classList.add('busy');
   try { await action(); if (success) toast(success); }
-  catch (error) { toast(String(error instanceof Error ? error.message : error), 'error'); }
+  catch (error) {
+    toast(String(error instanceof Error ? error.message : error), 'error');
+    if (nativeAvailable) {
+      try {
+        const actual = await api.getState();
+        if (actual.configurationError) {
+          state.configurationError = actual.configurationError;
+          state.configurationDirectory = actual.configurationDirectory;
+          loadError = actual.configurationError;
+          configurationReady = false;
+        }
+      } catch { /* Preserve draft edits and the original error. */ }
+    }
+  }
   finally { busy = false; modalRoot.inert = false; root.classList.remove('busy'); render(); }
 }
 
@@ -276,9 +297,9 @@ async function loadState() {
     const value = await api.getState();
     state = value;
     persistedConfig = structuredClone(value.config);
-    configurationReady = true;
+    configurationReady = !value.configurationError;
     dirty = false;
-    loadError = '';
+    loadError = value.configurationError || '';
     currentAppId = value.config.apps[0]?.id || '';
     setTheme(value.config.settings.theme);
     lastRefresh = new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -361,7 +382,7 @@ document.addEventListener('click', async event => {
     return;
   }
   const action = target.dataset.action;
-  if (action === 'retry-load') { await loadState(); return; }
+  if (action === 'retry-load') { await withBusy(async () => { await api.recoverConfiguration(); await loadState(); }); return; }
   if (busy || loading) return;
   if (!['refresh-runtime', 'refresh-logs', 'install-runtime', 'close-modal'].includes(action || '') && !requireConfiguration()) return;
   const app = currentApp();

@@ -2,9 +2,13 @@
 
 ## 云端构建
 
-`.github/workflows/diskguard.yml` 仅在 Fork 中运行，使用 `windows-2022`、Node 22、Rust stable/MSVC x64 和 .NET 8。提交 `DiskGuard/` 或该 workflow 的变更会触发构建；也支持 Actions 页手动运行。`diskguard-v<version>` 标签必须与 Tauri 版本完全一致，构建成功后上传 GitHub Release。
+`.github/workflows/diskguard.yml` 仅在 Fork 中运行，使用 `windows-2022`、Node 22、固定 Rust 1.99.1/MSVC x64 和 .NET 8。提交 `DiskGuard/`、`diskguard*.yml` 或 Dependabot 配置的变更会触发构建；也支持 Actions 页手动运行。`diskguard-v<version>` 标签必须与 Tauri 版本完全一致，质量门禁成功后上传 GitHub 预发布。旧版本记录不能证明未发布代码已验证。
 
-构建先按锁文件下载官方 Classic x64 安装器，要求 SHA-256 匹配且 Authenticode Valid，然后执行 `npm ci`、前端编译、可用的前端测试、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked --all-targets` 以及 Tauri NSIS 打包。构建任务仅打包官方安装器，不在该构建机安装驱动；驱动部署与行为验证由独立的一次性 VM 任务执行。
+构建先按锁文件下载官方 Classic x64 安装器，要求 SHA-256 匹配且 Authenticode Valid，然后执行 `npm ci`、前端编译、必需的前端单元测试、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked --all-targets` 以及 Tauri NSIS 打包。另执行 Playwright 浏览器回归，以及带页面溢出/最低字号断言的预览截图；浏览器桥接是明确的测试模拟，不代表真实驱动。构建任务仅打包官方安装器，不在该构建机安装驱动；驱动部署与行为验证由独立的一次性 VM 任务执行。
+
+新增 `diskguard-security.yml` 被主流程调用，执行 npm 锁文件审计、RustSec 以及 JS/Actions CodeQL，也支持每周检查和手动运行。它不修改上游旧 CodeQL 工作流的禁用状态。依赖审计和静态分析不能证明没有漏洞；服务端权限或工具安装失败必须修复，不能直接移除门禁。
+
+新增 `Test-ProductPolicy.ps1` 在安装/便携 VM 中调用应用的 `--product-policy-test`。它使用独立临时配置目录，通过与 Tauri 命令相同的 Backend 保存/应用代码生成黑名单，再验证真实读取/枚举拒绝、相邻目录允许、强制启动、子进程、独立进程重新载入状态、规则停用与应用删除。只有结果文件目录使用测试夹具的宿主写入例外；阻断规则不通过 SbieIni 代写。该流程不是完整 UI 点击链，也不测试系统重启，仍需客户端验收。
 
 成功产物包括集成官方运行时的 x64 NSIS 安装包、便携 ZIP、`BUILD-MANIFEST.json` 与 `SHA256SUMS.txt`。构建 transcript 包含工具版本和编译输出，失败时也尝试上传单独日志 Artifact。GitHub Actions 的任务日志是开始执行脚本之前发生故障时的诊断来源。Release 作业仅在标签推送时获取 `contents: write`；普通构建使用只读仓库权限。
 
@@ -18,6 +22,8 @@
 # 在 Fork 的仓库目录中，使用有 Windows 构建依赖的环境：
 ./DiskGuard/scripts/Build.ps1
 ```
+
+本地重新打包应使用空的 `DiskGuard/dist`（先保留既有产物或使用全新工作副本）；脚本拒绝混入旧版本，便携临时目录也每次唯一。发布前要求四个准确命名的产物、匹配标签的源码/版本清单与完整校验和，不接收多余旧文件。
 
 构建失败时应依据失败步骤及 transcript 修复原因后重新运行，不应删除测试、放宽错误检查或把缺少运行时计为通过。Tauri 的安装包配置和 CI 参考官方 [Windows Installer](https://v2.tauri.app/distribute/windows-installer/) 与 [GitHub Pipeline](https://v2.tauri.app/distribute/pipelines/github/) 文档。
 

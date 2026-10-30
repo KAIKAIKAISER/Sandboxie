@@ -2,6 +2,22 @@
 version: 2
 updates:
 
+  - package-ecosystem: "npm"
+    directory: "/DiskGuard/ui"
+    schedule:
+      interval: "weekly"
+    groups:
+      tauri:
+        patterns: ["@tauri-apps/*"]
+
+  - package-ecosystem: "cargo"
+    directory: "/DiskGuard/src-tauri"
+    schedule:
+      interval: "weekly"
+    groups:
+      tauri:
+        patterns: ["tauri", "tauri-*"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

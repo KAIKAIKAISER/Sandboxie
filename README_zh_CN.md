@@ -1,4 +1,14 @@
-# Sandboxie Plus / Classic
+# DiskGuard — Sandboxie 下游项目
+
+本 Fork 默认 `diskguard` 分支开发独立的 Rust + Tauri 2 控制器，面向 **Windows 10/11 x64**，保留上游 Sandboxie core。下文上游的系统支持范围不等于 DiskGuard 支持范围。
+
+[DiskGuard 下载](https://github.com/KAIKAIKAISER/Sandboxie/releases) · [项目说明](DiskGuard/README.md) · [中文使用指南与原生 SBIE 提示](DiskGuard/docs/USER-GUIDE.zh-CN.md) · [发布验收检查表](DiskGuard/docs/RELEASE-CHECKLIST.zh-CN.md)
+
+[![DiskGuard Windows x64](https://github.com/KAIKAIKAISER/Sandboxie/actions/workflows/diskguard.yml/badge.svg?branch=diskguard)](https://github.com/KAIKAIKAISER/Sandboxie/actions/workflows/diskguard.yml)
+
+DiskGuard 程序自身尚未签名；Server 2022 CI 不能代替 Windows 10/11 或 QQ/微信验收。后续自动发布默认标记为预发布，待客户端验证和签名工作完成。
+
+## 以下为上游 Sandboxie Plus / Classic 说明
 
 <p align='center'>
 <a href='./README.md'>EN</a> | 中文

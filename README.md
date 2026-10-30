@@ -1,4 +1,14 @@
-# Sandboxie Plus / Classic
+# DiskGuard — Sandboxie downstream
+
+This fork's default `diskguard` branch contains an independent Rust + Tauri 2 controller for **Windows 10/11 x64**. The upstream Sandboxie core is preserved; upstream platform claims below do not extend DiskGuard support.
+
+[DiskGuard downloads](https://github.com/KAIKAIKAISER/Sandboxie/releases) · [Project README](DiskGuard/README.md) · [Chinese user guide and native SBIE messages](DiskGuard/docs/USER-GUIDE.zh-CN.md) · [Release checklist](DiskGuard/docs/RELEASE-CHECKLIST.zh-CN.md)
+
+[![DiskGuard Windows x64](https://github.com/KAIKAIKAISER/Sandboxie/actions/workflows/diskguard.yml/badge.svg?branch=diskguard)](https://github.com/KAIKAIKAISER/Sandboxie/actions/workflows/diskguard.yml)
+
+DiskGuard binaries are currently unsigned. Server 2022 CI is not Windows 10/11 or QQ/WeChat acceptance evidence. Future automated releases default to prereleases pending client validation and signing work.
+
+## Upstream Sandboxie Plus / Classic
 
 <p align='center'>
 EN | <a href='./README_zh_CN.md'>中文</a>

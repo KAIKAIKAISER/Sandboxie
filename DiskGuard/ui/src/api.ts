@@ -13,6 +13,7 @@ export const api = {
   getState: () => command<AppState>('get_state'),
   frontendReady: () => command<void>('frontend_ready'),
   saveConfig: (config: Config) => command<void>('save_config', { config }),
+  recoverConfiguration: () => command<{ message: string }>('recover_configuration'),
   applyPolicy: (appId: string) => command<{ message: string }>('apply_policy', { appId }),
   launchApp: (appId: string) => command<{ message: string }>('launch_app', { appId }),
   getLogs: (filter: LogFilter) => command<LogResponse>('get_logs', { filter }),

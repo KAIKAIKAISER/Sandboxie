@@ -1,0 +1,72 @@
+name: DiskGuard dependency and source security
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * 2'
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    if: github.repository != 'sandboxie-plus/Sandboxie'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
+        with:
+          toolchain: '1.99.1'
+      - name: Audit locked frontend dependencies
+        working-directory: DiskGuard/ui
+        shell: bash
+        run: npm audit --package-lock-only --ignore-scripts --audit-level=high | tee npm-audit.txt
+      - name: Install pinned RustSec client and audit locked Rust dependencies
+        shell: bash
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit --file DiskGuard/src-tauri/Cargo.lock 2>&1 | tee cargo-audit.txt
+      - name: Record the shipped target dependency graph
+        run: cargo tree --manifest-path DiskGuard/src-tauri/Cargo.toml --locked --target x86_64-pc-windows-msvc > windows-dependency-tree.txt
+      - name: Preserve audit results including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diskguard-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            DiskGuard/ui/npm-audit.txt
+            cargo-audit.txt
+            windows-dependency-tree.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+  codeql:
+    if: github.repository != 'sandboxie-plus/Sandboxie'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          category: /language:${{ matrix.language }}/diskguard

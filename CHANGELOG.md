@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## DiskGuard downstream (Unreleased)
+
+- Add actual product-backend policy VM probes, required frontend regression tests and layout assertions; retain independent upstream enforcement probes.
+- Update the locked Tokio dependency from 1.54.0 to 1.54.1 for RUSTSEC-2026-0384.
+- Journal configuration saves before runtime policy retirement, retain last-good snapshots and resume incomplete saves; start read-only on configuration errors instead of discarding data or exiting.
+- Expand downstream workflow triggers, pin Actions and Rust, add npm/Cargo dependency updates, security scans and a release quality gate. Default future releases to prereleases until client acceptance and signing are reviewed.
+- Add a bundled Chinese user guide covering native Sandboxie agents, recovery, SBIE messages and release acceptance. Preserve upstream core, signing enforcement and existing user data.
+
 ## DiskGuard downstream 0.2.1
 
 - Increase interface typography to readable sizes, including navigation, actions, status messages, forms and logs. Use a shared relative type scale and improve secondary text contrast.

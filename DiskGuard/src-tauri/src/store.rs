@@ -1,7 +1,11 @@
 use crate::model::Config;
 use crate::policy::validate_config;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{fs, io::Write, path::Path};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::Path,
+};
 
 pub fn read_config(path: &Path) -> Result<Config, String> {
     if !path.exists() {
@@ -13,11 +17,22 @@ pub fn read_config(path: &Path) -> Result<Config, String> {
 }
 
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-    if metadata.len() > 4 * 1024 * 1024 {
+    read_json_with_limit(path, 4 * 1024 * 1024)
+}
+
+pub fn read_json_with_limit<T: DeserializeOwned>(path: &Path, limit: u64) -> Result<T, String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > limit {
         return Err("配置文件过大".into());
     }
-    serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err("配置文件过大".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
 pub fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<(), String> {

@@ -23,6 +23,9 @@ function Invoke-Checked {
 $script:commandIndex = 0
 
 try {
+    if (@(Get-ChildItem -LiteralPath $distributionDirectory -Force).Count -ne 0) {
+        throw 'Distribution directory is not empty. Preserve previous artifacts and use a fresh workspace; refusing to mix release versions.'
+    }
     Push-Location $projectRoot
     try {
         Invoke-Checked 'node' @('--version')
@@ -32,7 +35,7 @@ try {
         Invoke-Checked 'pwsh' @('-NoProfile', '-File', 'scripts/Get-BundledRuntime.ps1')
         Invoke-Checked 'npm' @('--prefix', 'ui', 'ci', '--no-audit', '--no-fund')
         Invoke-Checked 'npm' @('--prefix', 'ui', 'run', 'build')
-        Invoke-Checked 'npm' @('--prefix', 'ui', 'run', 'test', '--if-present')
+        Invoke-Checked 'npm' @('--prefix', 'ui', 'run', 'test')
         Invoke-Checked 'cargo' @('fmt', '--manifest-path', 'src-tauri/Cargo.toml', '--all', '--', '--check')
         Invoke-Checked 'cargo' @('clippy', '--manifest-path', 'src-tauri/Cargo.toml', '--locked', '--all-targets', '--', '-D', 'warnings')
         Invoke-Checked 'cargo' @('test', '--manifest-path', 'src-tauri/Cargo.toml', '--locked', '--all-targets')
@@ -48,10 +51,14 @@ try {
         if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS x64 installer' }
         Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $distributionDirectory "DiskGuard_${version}_x64-setup.exe")
 
-        $portableDirectory = Join-Path $projectRoot 'work/portable'
+        $portableDirectory = Join-Path $projectRoot ('work/portable-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $portableDirectory -Force | Out-Null
         Copy-Item -LiteralPath $application -Destination (Join-Path $portableDirectory 'DiskGuard.exe')
         Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/RUNTIME.md') -Destination (Join-Path $portableDirectory 'README-runtime.md')
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/USER-GUIDE.zh-CN.md') -Destination (Join-Path $portableDirectory 'USER-GUIDE.zh-CN.md')
+        foreach ($guide in @('RELEASE-CHECKLIST.zh-CN.md', 'DEPENDENCY-REVIEW.md', 'VALIDATION.md')) {
+            Copy-Item -LiteralPath (Join-Path $projectRoot "docs/$guide") -Destination (Join-Path $portableDirectory $guide)
+        }
         Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE.Classic') -Destination (Join-Path $portableDirectory 'LICENSE.GPL-3.0.txt')
         if (Test-Path -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md')) {
             Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destination $portableDirectory

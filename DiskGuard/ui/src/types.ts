@@ -78,4 +78,4 @@ export interface LogFilter {
 }
 
 export interface LogResponse { entries: LogEntry[]; notice?: string; dropped?: number }
-export interface AppState { config: Config; runtime: RuntimeStatus; appliedAppIds: string[]; pendingAppIds: string[] }
+export interface AppState { config: Config; runtime: RuntimeStatus; appliedAppIds: string[]; pendingAppIds: string[]; configurationError?: string | null; configurationDirectory?: string }

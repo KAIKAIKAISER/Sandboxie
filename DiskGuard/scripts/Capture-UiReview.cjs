@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
 const project = path.resolve(__dirname, '..');
-const { chromium } = require(path.join(project, 'work/ui-review/node_modules/playwright'));
+const { chromium } = require(path.join(project, 'ui/node_modules/playwright'));
 
 (async () => {
   const dist = path.join(project, 'ui/dist');
@@ -47,6 +47,13 @@ const { chromium } = require(path.join(project, 'work/ui-review/node_modules/pla
               viewportWidth: document.documentElement.clientWidth,
               documentWidth: document.documentElement.scrollWidth };
           }, { theme, width, name }));
+          const measurement = measurements.at(-1);
+          if (measurement.documentWidth > measurement.viewportWidth + 1) {
+            throw new Error(`Horizontal page overflow: ${theme}/${width}/${name}`);
+          }
+          if (measurement.smallestVisibleTextPx < 12) {
+            throw new Error(`Unreadably small text: ${theme}/${width}/${name}`);
+          }
         };
         await capture('overview');
         if (theme === 'light' && width === 1000) {

@@ -1162,14 +1162,30 @@ mod platform {
         pub fn remove_policy(&mut self, box_name: &str) -> Result<(), String> {
             valid_box(box_name)?;
             self.ensure_stopped(box_name)?;
+            // Journal replay may reach a box already removed by an earlier
+            // attempt. Do not depend on the updater accepting a missing section.
+            let mut has_managed_settings = false;
+            for key in MANAGED_KEYS {
+                if !self.read_setting(box_name, key)?.is_empty() {
+                    has_managed_settings = true;
+                    break;
+                }
+            }
+            if !has_managed_settings {
+                return Ok(());
+            }
             // Removing configuration never deletes sandbox contents/user files.
             self.update(b's' as u16, box_name, "*", None)?;
             nt_check(
                 unsafe { (self.reload_conf)(u32::MAX, 0) },
                 "Reload Sandboxie configuration",
             )?;
-            if !self.read_setting(box_name, "Enabled")?.is_empty() {
-                return Err("Sandboxie configuration removal could not be verified".into());
+            for key in MANAGED_KEYS {
+                if !self.read_setting(box_name, key)?.is_empty() {
+                    return Err(format!(
+                        "Sandboxie configuration removal could not be verified for {key}"
+                    ));
+                }
             }
             Ok(())
         }

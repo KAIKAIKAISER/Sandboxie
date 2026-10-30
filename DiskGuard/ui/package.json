@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:ui": "playwright test",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri"
   },
@@ -14,6 +16,7 @@
     "@tauri-apps/plugin-dialog": "^2.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.56.1",
     "@tauri-apps/cli": "^2.8.0",
     "typescript": "~5.9.3",
     "vite": "^7.1.7"

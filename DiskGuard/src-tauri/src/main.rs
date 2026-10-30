@@ -1,9 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod product_test;
 mod runtime_install;
 
 use chrono::{DateTime, Utc};
 use diskguard::{
+    config_store::{self, Snapshot},
     model::*,
     policy,
     sandboxie::{Runtime, RuntimeStatus},
@@ -79,6 +81,8 @@ struct ViewState {
     runtime: Status,
     applied_app_ids: Vec<String>,
     pending_app_ids: Vec<String>,
+    configuration_error: Option<String>,
+    configuration_directory: String,
 }
 #[derive(Serialize)]
 struct LogPage {
@@ -103,6 +107,7 @@ struct Inner {
     logs: VecDeque<LogEntry>,
     sequence: u64,
     dropped: u64,
+    configuration_error: Option<String>,
 }
 struct Backend {
     inner: Mutex<Inner>,
@@ -112,31 +117,41 @@ struct Backend {
     shutting_down: AtomicBool,
 }
 impl Backend {
-    fn new(directory: PathBuf) -> Result<Self, String> {
-        let config = store::read_config(&directory.join("config.json"))?;
-        let applied_path = directory.join("applied.json");
-        let applied: BTreeMap<String, ManagedApp> = if applied_path.exists() {
-            store::read_json(&applied_path)?
-        } else {
-            BTreeMap::new()
+    fn new(directory: PathBuf) -> Self {
+        let loaded = (|| {
+            if config_store::pending(&directory)?.is_some() {
+                return Err("检测到未完成保存。部分运行时策略可能已改变；请恢复保存，不要据旧状态判断保护有效。".into());
+            }
+            config_store::load(&directory)
+        })();
+        let (snapshot, configuration_error) = match loaded {
+            Ok(snapshot) => (snapshot, None),
+            Err(error) => (
+                Snapshot {
+                    config: Config {
+                        apps: vec![],
+                        ..Config::default()
+                    },
+                    applied: BTreeMap::new(),
+                },
+                Some(error),
+            ),
         };
-        for a in applied.values() {
-            policy::validate_box(&a.sandbox)?;
-        }
-        Ok(Self {
+        Self {
             inner: Mutex::new(Inner {
-                config,
-                applied,
+                config: snapshot.config,
+                applied: snapshot.applied,
                 runtime: Status::unavailable("正在检测已安装的 Sandboxie 运行时…"),
                 logs: VecDeque::new(),
                 sequence: 0,
                 dropped: 0,
+                configuration_error,
             }),
             runtime: Mutex::new(None),
             mutation: Mutex::new(()),
             directory,
             shutting_down: AtomicBool::new(false),
-        })
+        }
     }
     fn view(&self) -> ViewState {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
@@ -151,10 +166,63 @@ impl Backend {
                 .filter(|a| inner.applied.get(&a.id) != Some(*a))
                 .map(|a| a.id.clone())
                 .collect(),
+            configuration_error: inner.configuration_error.clone(),
+            configuration_directory: self.directory.to_string_lossy().into_owned(),
         }
+    }
+    fn require_configuration(&self) -> Result<(), String> {
+        if let Some(error) = &self
+            .inner
+            .lock()
+            .map_err(|_| "配置锁错误")?
+            .configuration_error
+        {
+            return Err(format!("配置处于只读恢复状态：{error}"));
+        }
+        Ok(())
+    }
+    fn finish_save(&self, transaction: &config_store::PendingSave) -> Result<(), String> {
+        let result = config_store::finish(&self.directory, transaction, |sandbox| {
+            self.runtime
+                .lock()
+                .map_err(|_| "运行时锁错误")?
+                .as_mut()
+                .ok_or("请先连接运行时，再恢复停用或删除策略的保存")?
+                .remove_policy(sandbox)
+        });
+        let mut inner = self.inner.lock().map_err(|_| "配置锁错误")?;
+        match result {
+            Ok(snapshot) => {
+                inner.config = snapshot.config;
+                inner.applied = snapshot.applied;
+                inner.configuration_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                let message = format!("保存尚未完成，部分策略可能已移除；操作日志已保留。请修复权限/磁盘/运行时问题后点击「恢复保存 / 重新载入」。{error}");
+                inner.configuration_error = Some(message.clone());
+                Err(message)
+            }
+        }
+    }
+    fn recover_configuration(&self) -> Result<ActionResult, String> {
+        let _mutation = self.mutation.lock().map_err(|_| "后台状态锁错误")?;
+        if let Some(transaction) = config_store::pending(&self.directory)? {
+            self.finish_save(&transaction)?;
+        } else {
+            let snapshot = config_store::load(&self.directory)?;
+            let mut inner = self.inner.lock().map_err(|_| "配置锁错误")?;
+            inner.config = snapshot.config;
+            inner.applied = snapshot.applied;
+            inner.configuration_error = None;
+        }
+        Ok(ActionResult {
+            message: "配置已重新载入。恢复的保存已完成；修改后的目录规则仍须应用策略。".into(),
+        })
     }
     fn apply(&self, id: &str, launch: bool) -> Result<ActionResult, String> {
         let _mutation = self.mutation.lock().map_err(|_| "后台状态锁错误")?;
+        self.require_configuration()?;
         let app = self
             .inner
             .lock()
@@ -225,29 +293,16 @@ impl Backend {
     fn save(&self, config: Config) -> Result<ActionResult, String> {
         policy::validate_config(&config)?;
         let _mutation = self.mutation.lock().map_err(|_| "后台状态锁错误")?;
-        let applied = self.inner.lock().map_err(|_| "配置锁错误")?.applied.clone();
-        let retired: Vec<_> = applied
-            .values()
-            .filter(|old| {
-                !config
-                    .apps
-                    .iter()
-                    .any(|new| new.id == old.id && new.enabled && new.sandbox == old.sandbox)
-            })
-            .cloned()
-            .collect();
-        for old in &retired {
-            let mut runtime = self.runtime.lock().map_err(|_| "运行时锁错误")?;
-            runtime
-                .as_mut()
-                .ok_or("尚有已应用的沙箱。请连接运行时后再禁用、删除或重命名，防止残留强制规则。")?
-                .remove_policy(&old.sandbox)?;
-            let mut inner = self.inner.lock().map_err(|_| "配置锁错误")?;
-            inner.applied.remove(&old.id);
-            store::write_json(&self.directory.join("applied.json"), &inner.applied)?;
-        }
-        store::write_json(&self.directory.join("config.json"), &config)?;
-        self.inner.lock().map_err(|_| "配置锁错误")?.config = config;
+        self.require_configuration()?;
+        let before = {
+            let inner = self.inner.lock().map_err(|_| "配置锁错误")?;
+            Snapshot {
+                config: inner.config.clone(),
+                applied: inner.applied.clone(),
+            }
+        };
+        let transaction = config_store::prepare(&self.directory, before, config)?;
+        self.finish_save(&transaction)?;
         Ok(ActionResult { message: "配置已保存。修改后的目录策略需点击「应用策略」；删除、禁用软件时旧强制规则已清除，沙箱内文件保留。".into() })
     }
     fn monitor(self: Arc<Self>) {
@@ -348,6 +403,13 @@ fn get_state(app: tauri::AppHandle, state: State<'_, Arc<Backend>>) -> ViewState
 #[tauri::command]
 fn runtime_status(state: State<'_, Arc<Backend>>) -> Status {
     state.view().runtime
+}
+#[tauri::command]
+async fn recover_configuration(state: State<'_, Arc<Backend>>) -> Result<ActionResult, String> {
+    let backend = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || backend.recover_configuration())
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn get_runtime_installation(
@@ -543,6 +605,7 @@ fn set_autostart(
     enabled: bool,
 ) -> Result<ActionResult, String> {
     let _mutation = state.mutation.lock().map_err(|_| "后台状态锁错误")?;
+    state.require_configuration()?;
     if enabled {
         app.autolaunch().enable()
     } else {
@@ -733,6 +796,13 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args
         .get(1)
+        .is_some_and(|arg| arg == "--product-policy-test")
+    {
+        let success = args.len() == 4 && product_test::run(&args[2], &args[3]);
+        std::process::exit(if success { 0 } else { 1 });
+    }
+    if args
+        .get(1)
         .is_some_and(|arg| arg == "--install-bundled-runtime")
     {
         std::process::exit(install_runtime_cli(&args));
@@ -778,9 +848,7 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
-            let backend = Arc::new(
-                Backend::new(app.path().app_config_dir()?).map_err(std::io::Error::other)?,
-            );
+            let backend = Arc::new(Backend::new(app.path().app_config_dir()?));
             backend.clone().monitor();
             app.manage(backend);
             let show = MenuItem::with_id(app, "show", "打开 DiskGuard", true, None::<&str>)?;
@@ -856,6 +924,7 @@ fn main() {
             get_runtime_installation,
             install_bundled_runtime,
             save_config,
+            recover_configuration,
             apply_policy,
             launch_app,
             get_logs,
@@ -881,6 +950,37 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn corrupt_configuration_starts_read_only_and_preserves_the_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        std::fs::write(&path, b"{broken").unwrap();
+        let backend = Backend::new(directory.path().to_owned());
+        assert!(backend.view().configuration_error.is_some());
+        assert!(backend.require_configuration().is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"{broken");
+    }
+    #[test]
+    fn incomplete_file_commit_is_read_only_across_restart_and_can_resume() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = Backend::new(directory.path().to_owned());
+        let applied_path = directory.path().join("applied.json");
+        std::fs::create_dir(&applied_path).unwrap();
+        let empty = Config {
+            apps: vec![],
+            ..Config::default()
+        };
+        assert!(backend.save(empty.clone()).is_err());
+        assert!(backend.view().configuration_error.is_some());
+        assert!(backend.save(empty).is_err());
+        let restarted = Backend::new(directory.path().to_owned());
+        assert!(restarted.view().configuration_error.is_some());
+        std::fs::remove_dir(applied_path).unwrap();
+        restarted.recover_configuration().unwrap();
+        assert!(restarted.view().configuration_error.is_none());
+        assert!(restarted.view().config.apps.is_empty());
+        assert!(!directory.path().join("pending-save.json").exists());
+    }
     #[test]
     fn csv_export_prevents_spreadsheet_formulas() {
         for s in ["=HYPERLINK(\"x\")", "+cmd", "-1+2", "@test", "  =x"] {

@@ -4,6 +4,8 @@
 
 ## 安装与运行
 
+完整操作、配置恢复、原生托盘/边框/文件恢复提示与 SBIE 错误说明见 [中文使用指南](docs/USER-GUIDE.zh-CN.md)。维护者见 [发布检查表](docs/RELEASE-CHECKLIST.zh-CN.md)。
+
 1. 安装 DiskGuard NSIS 包。0.2.0 起内置未经修改的官方签名 Classic x64 5.73.8 安装器：缺少运行时时，安装流程验证固定 SHA-256 与 Authenticode，再通过 Windows UAC 请求管理员权限部署驱动和服务，无需另行下载。提示需要重启时按提示操作，保持驱动签名强制检查启用。
 2. 也可解压便携包，打开 DiskGuard 后点击“安装内置运行时”。便携包包含安装器，但驱动与服务仍须获得管理员授权安装到系统。已有 Classic/Plus 安装会保留，不自动替换或降级；异常安装应使用其官方安装程序修复。系统需要 Microsoft Edge WebView2（DiskGuard 安装包会按需安装）。
 3. 在软件页为 QQ、微信预设选择实际 EXE，或添加任意 EXE。每个软件使用独立 `DiskGuard_` 沙箱。
@@ -37,13 +39,15 @@
 
 [Fork 仓库](https://github.com/KAIKAIKAISER/Sandboxie) · [Windows 构建记录](https://github.com/KAIKAIKAISER/Sandboxie/actions/workflows/diskguard.yml)
 
-- Push/PR 修改 DiskGuard 时构建，支持手动触发。
-- `diskguard-v<版本>` 标签构建并发布 GitHub Release；标签必须与 `tauri.conf.json` 版本匹配。
+- Push/PR 修改 DiskGuard、其任一工作流或 Dependabot 配置时构建，支持手动触发；使用固定 Rust 工具链与 SHA 固定的 Actions。
+- `diskguard-v<版本>` 标签构建并发布 GitHub 预发布；标签必须与 `tauri.conf.json` 版本匹配。质量门禁要求构建、安全检查和适用的真实 VM 测试全部通过。
 - Artifacts 包含集成官方签名运行时的 x64 NSIS 安装包、便携 ZIP、SHA-256、构建清单及构建日志。构建时固定下载、验证并原样打包官方安装器；不会在构建机部署驱动。
 - 不重编译或分发自签内核驱动，不改变 Windows 签名要求。UI 本身尚未使用发布者代码签名，Windows 可能显示未知发布者。
 - 编译通过不等于真实驱动验证通过。详见 [验证说明](docs/VALIDATION.md) 与独立签名运行时测试工作流。
 
-本地开发（可选）：Node.js 22、Rust stable、MSVC C++ Build Tools 和 Windows SDK；先运行 `DiskGuard/scripts/Get-BundledRuntime.ps1`（仅下载与验证，不安装），再执行 `cd DiskGuard/ui && npm ci`，然后在 `DiskGuard/` 运行 `node ui/node_modules/@tauri-apps/cli/tauri.js dev`。正式构建使用 `scripts/Build.ps1`。优先由 GitHub Windows runner 安装工具链并执行构建。
+本地开发（可选）：Node.js 22、`rust-toolchain.toml` 指定的 Rust、MSVC C++ Build Tools 和 Windows SDK；先运行 `DiskGuard/scripts/Get-BundledRuntime.ps1`（仅下载与验证，不安装），再执行 `cd DiskGuard/ui && npm ci`，然后在 `DiskGuard/` 运行 `node ui/node_modules/@tauri-apps/cli/tauri.js dev`。正式构建使用 `scripts/Build.ps1`。优先由 GitHub Windows runner 安装工具链并执行构建。
+
+前端测试：在 `DiskGuard/ui` 中运行 `npm test`、`npx playwright install chromium` 和 `npm run test:ui`；浏览器回归测试只模拟原生桥接，不是驱动验证。配置写入失败保留待恢复日志，编辑进入只读状态；程序不会静默丢弃损坏配置或自动删除沙箱数据。
 
 ## 架构与许可证
 

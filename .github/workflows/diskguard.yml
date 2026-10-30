@@ -7,11 +7,13 @@ on:
     tags: ['diskguard-v[0-9]*']
     paths:
       - 'DiskGuard/**'
-      - '.github/workflows/diskguard.yml'
+      - '.github/workflows/diskguard*.yml'
+      - '.github/dependabot.yml'
   pull_request:
     paths:
       - 'DiskGuard/**'
-      - '.github/workflows/diskguard.yml'
+      - '.github/workflows/diskguard*.yml'
+      - '.github/dependabot.yml'
 
 permissions:
   contents: read
@@ -22,6 +24,14 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  security:
+    if: github.repository != 'sandboxie-plus/Sandboxie'
+    uses: ./.github/workflows/diskguard-security.yml
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+
   build:
     # This workflow belongs to the downstream UI, never the upstream publisher.
     if: github.repository != 'sandboxie-plus/Sandboxie'
@@ -34,22 +44,23 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: DiskGuard/ui/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
         with:
+          toolchain: '1.99.1'
           targets: x86_64-pc-windows-msvc
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: 'DiskGuard/src-tauri -> target'
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
       - name: Verify tag matches application version
@@ -65,18 +76,20 @@ jobs:
         run: ./DiskGuard/scripts/Build.ps1
       - name: Capture frontend pages for font and layout review
         run: |
-          npm install --prefix DiskGuard/work/ui-review --no-save --package-lock=false --no-audit --no-fund playwright@1.56.1
-          if ($LASTEXITCODE -ne 0) { throw 'Visual review tooling installation failed' }
-          node DiskGuard/work/ui-review/node_modules/playwright/cli.js install chromium
+          node DiskGuard/ui/node_modules/playwright/cli.js install chromium
           if ($LASTEXITCODE -ne 0) { throw 'Visual review browser installation failed' }
+          npm --prefix DiskGuard/ui run test:ui
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend regression tests failed' }
           node DiskGuard/scripts/Capture-UiReview.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Visual review capture failed' }
       - name: Upload frontend review screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: diskguard-ui-review-${{ github.sha }}
-          path: DiskGuard/work/ui-review-captures/**
+          path: |
+            DiskGuard/work/ui-review-captures/**
+            DiskGuard/ui/test-results/**
           if-no-files-found: warn
           retention-days: 30
       - name: Compile the isolated VM probe (does not execute a driver test)
@@ -84,7 +97,7 @@ jobs:
           dotnet build DiskGuard/scripts/probe/RuntimeProbe.csproj --configuration Release --nologo 2>&1 | Tee-Object -FilePath DiskGuard/build-logs/runtime-probe-build.txt
           if ($LASTEXITCODE -ne 0) { throw 'Runtime probe compilation failed' }
       - name: Upload Windows x64 installer and portable UI
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: diskguard-windows-x64-${{ github.sha }}
           path: DiskGuard/dist/*
@@ -92,7 +105,7 @@ jobs:
           retention-days: 30
       - name: Upload complete build transcript even on failure
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: diskguard-build-logs-${{ github.sha }}
           path: DiskGuard/build-logs/**
@@ -118,13 +131,13 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/diskguard-v') && github.event_name == 'push'
-    needs: [build, bundled-runtime]
+    needs: [build, bundled-runtime, quality-gate]
     runs-on: windows-2022
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: diskguard-windows-x64-${{ github.sha }}
           path: release-assets
@@ -139,6 +152,8 @@ jobs:
           $notes = @'
           Independent Rust + Tauri 2 DiskGuard UI for Windows 10/11 x64.
 
+          Pre-release: Windows client acceptance and publisher signing remain separate release requirements.
+
           Includes the unmodified official signed Sandboxie Classic x64 5.73.8 installer.
           The setup package installs a missing runtime through normal Windows administrator authorization; portable users can select Install bundled runtime in the application.
           Existing runtimes are preserved. Microsoft Edge WebView2 is also required; setup installs it if needed.
@@ -150,8 +165,45 @@ jobs:
           '@
           $notes | Set-Content -LiteralPath release-notes.md -Encoding utf8
           $assets = @(Get-ChildItem -LiteralPath release-assets -File | ForEach-Object { $_.FullName })
-          if ($assets.Count -lt 4) { throw 'Release artifact set is incomplete' }
+          $version = $env:RELEASE_TAG.Substring('diskguard-v'.Length)
+          $expectedNames = @('BUILD-MANIFEST.json', 'SHA256SUMS.txt', "DiskGuard_${version}_x64-setup.exe", "DiskGuard_${version}_windows-x64-portable.zip")
+          $actualNames = @(Get-ChildItem -LiteralPath release-assets -File | ForEach-Object { $_.Name })
+          if ($assets.Count -ne 4 -or @(Compare-Object $expectedNames $actualNames).Count -ne 0) { throw 'Release artifact set differs from the exact tagged version' }
+          $manifest = Get-Content release-assets/BUILD-MANIFEST.json -Raw | ConvertFrom-Json
+          if ($manifest.source_commit -cne $env:RELEASE_SHA -or $manifest.version -cne $version) { throw 'Release manifest source/version mismatch' }
+          $checked = @()
+          foreach ($line in Get-Content release-assets/SHA256SUMS.txt) {
+            if ($line -notmatch '^([a-fA-F0-9]{64})  (.+)$') { throw 'Malformed release checksum' }
+            $hash = $Matches[1]
+            $name = $Matches[2]
+            if ($name -notin $expectedNames -or $name -eq 'SHA256SUMS.txt' -or $checked -contains $name) { throw 'Unexpected or duplicate checksum target' }
+            if ((Get-FileHash -LiteralPath (Join-Path release-assets $name) -Algorithm SHA256).Hash -ine $hash) { throw "Release checksum mismatch: $name" }
+            $checked += $name
+          }
+          if ($checked.Count -ne 3) { throw 'Release checksums do not cover all payloads and the manifest' }
           gh release view $env:RELEASE_TAG --repo $env:GH_REPO *> $null
           if ($LASTEXITCODE -eq 0) { throw 'Release already exists; refusing to replace published assets' }
-          gh release create $env:RELEASE_TAG @assets --repo $env:GH_REPO --verify-tag --target $env:RELEASE_SHA --title "DiskGuard $env:RELEASE_TAG" --notes-file release-notes.md
+          gh release create $env:RELEASE_TAG @assets --repo $env:GH_REPO --verify-tag --target $env:RELEASE_SHA --title "DiskGuard $env:RELEASE_TAG" --notes-file release-notes.md --prerelease
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed' }
+
+  quality-gate:
+    name: DiskGuard quality gate
+    if: always() && github.repository != 'sandboxie-plus/Sandboxie'
+    needs: [build, security, bundled-runtime]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all applicable checks
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          RUNTIME_RESULT: ${{ needs.bundled-runtime.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$BUILD_RESULT" = success
+          test "$SECURITY_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$RUNTIME_RESULT" = skipped
+          else
+            test "$RUNTIME_RESULT" = success
+          fi

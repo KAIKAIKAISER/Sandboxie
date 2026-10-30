@@ -182,7 +182,7 @@ try {
     if ($payloadSignature.Status -ne 'Valid') { throw 'Bundled official installer is not Windows-trusted.' }
     $installedLock = Get-Content -LiteralPath (Join-Path $installDirectory 'runtime/runtime.lock.json') -Raw | ConvertFrom-Json
     if ($installedLock.sha256 -cne $runtimeLock.sha256 -or $installedLock.asset -cne $runtimeLock.asset) { throw 'Installed runtime lockfile does not match the audited build lock.' }
-    foreach ($name in @('runtime/NOTICE.md', 'THIRD-PARTY-NOTICES.md', 'README-runtime.md')) {
+    foreach ($name in @('runtime/NOTICE.md', 'THIRD-PARTY-NOTICES.md', 'README-runtime.md', 'USER-GUIDE.zh-CN.md', 'RELEASE-CHECKLIST.zh-CN.md', 'DEPENDENCY-REVIEW.md', 'VALIDATION.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $installDirectory $name))) { throw "Required installed notice missing: $name" }
     }
     if (-not ((Test-Path -LiteralPath (Join-Path $installDirectory 'LICENSE.txt')) -or (Test-Path -LiteralPath (Join-Path $installDirectory 'LICENSE.GPL-3.0.txt')))) {
@@ -229,6 +229,7 @@ try {
     if (-not $ui.success -or -not $ui.frontend_initialized -or -not $ui.backend_invoked -or -not $ui.runtime.driverAvailable) { throw 'Installed application native UI startup/bridge failed.' }
     $pwshPath = (Get-Process -Id $PID).Path
     Invoke-TestProcess -Path $pwshPath -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'Test-Runtime.ps1'), '-AcknowledgeDisposableVm', '-EvidenceDirectory', (Join-Path $evidenceDirectory 'enforcement')) -Stage 'independent-access-control-probe'
+    Invoke-TestProcess -Path $pwshPath -Arguments @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'Test-ProductPolicy.ps1'), '-Application', $application, '-EvidenceDirectory', (Join-Path $evidenceDirectory 'product-policy')) -Stage 'actual-product-policy-probe'
 
     $finalResult = [ordered]@{
         success = $true

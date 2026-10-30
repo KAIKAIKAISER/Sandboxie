@@ -31,10 +31,10 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
       - name: Install the DiskGuard package on a fresh VM and verify its bundled official runtime
@@ -62,7 +62,7 @@ jobs:
           if (Test-Path -LiteralPath $nativeReceipt) { Copy-Item -LiteralPath $nativeReceipt -Destination (Join-Path $directory 'native-last-install-report.json') }
       - name: Upload actual installation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: diskguard-integrated-${{ matrix.package_mode }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -73,6 +73,9 @@ jobs:
             DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/enforcement/*.jsonl
             DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/enforcement/*.txt
             DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/enforcement/results/*.json
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/product-policy/*.json
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/product-policy/*.txt
+            DiskGuard/work/integrated-runtime-${{ matrix.package_mode }}/product-policy/results/*.json
           if-no-files-found: warn
           retention-days: 30
       - name: State the precise verification scope
