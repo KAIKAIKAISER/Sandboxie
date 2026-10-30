@@ -26,4 +26,7 @@ test('native help is documented and guides are included in both package formats'
     assert.equal(config.bundle.resources[`../docs/${name}`], name);
     assert.ok(build.includes(name), name);
   }
+  assert.equal(config.bundle.resources['../docs/validation/'], 'validation/');
+  const receipt = JSON.parse(readFileSync(new URL('../../docs/validation/2026-10-30-server-2022.json', import.meta.url), 'utf8'));
+  assert.equal(receipt.windows_10_11_client_acceptance, 'not_run');
 });

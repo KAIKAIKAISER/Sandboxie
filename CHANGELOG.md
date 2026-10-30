@@ -8,6 +8,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - Update the locked Tokio dependency from 1.54.0 to 1.54.1 for RUSTSEC-2026-0384.
 - Journal configuration saves before runtime policy retirement, retain last-good snapshots and resume incomplete saves; start read-only on configuration errors instead of discarding data or exiting.
 - Expand downstream workflow triggers, pin Actions and Rust, add npm/Cargo dependency updates, security scans and a release quality gate. Default future releases to prereleases until client acceptance and signing are reviewed.
+- Use current Node 24-based checkout/setup/artifact actions and a fixed Ubuntu 24.04 runner for downstream Linux checks.
 - Add a bundled Chinese user guide covering native Sandboxie agents, recovery, SBIE messages and release acceptance. Preserve upstream core, signing enforcement and existing user data.
 
 ## DiskGuard downstream 0.2.1

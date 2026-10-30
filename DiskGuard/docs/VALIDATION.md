@@ -48,6 +48,8 @@
 
 ## 发布验收矩阵
 
+本轮 Server 2022 证据：提交 `4787ecf` 的 [CI 41049659514](https://github.com/KAIKAIKAISER/Sandboxie/actions/runs/41049659514) 已通过原生测试和两种包的真实产品策略探针，摘要见 [validation/2026-10-30-server-2022.json](validation/2026-10-30-server-2022.json)。这不改变下面客户端“待执行”的状态；后续提交以自身运行记录为准。
+
 | 场景 | Windows 10 x64 | Windows 11 x64 | 所需证据 |
 | --- | --- | --- | --- |
 | NSIS 安装、启动、卸载与 WebView2 | 待执行 | 待执行 | 安装日志、版本、系统构建 |

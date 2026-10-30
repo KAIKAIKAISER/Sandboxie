@@ -1,0 +1,37 @@
+{
+  "source_commit": "4787ecfe5cbc46dfa4abff5fea5a673a5c6a3a99",
+  "run_url": "https://github.com/KAIKAIKAISER/Sandboxie/actions/runs/41049659514",
+  "platform": "GitHub-hosted Windows Server 2022 (10.0.20348)",
+  "rust_unit_tests_passed": 29,
+  "frontend_unit_tests_passed": 3,
+  "browser_mock_bridge_tests_passed": 8,
+  "layout_captures_checked": 31,
+  "security_jobs_passed": ["npm audit", "RustSec (5 informational warnings retained)", "CodeQL actions", "CodeQL javascript-typescript"],
+  "packages": [
+    {
+      "mode": "installer",
+      "evidence_artifact_id": 12973814536,
+      "deployment_and_preservation_passed": true,
+      "actual_product_policy_probe_passed": true,
+      "package_sha256": "2485bfa363e8581ccb3f63a5783f490d4248ccd8dfbd6dbea18fa4905f2b12fa",
+      "application_sha256": "f2f2b05a7e54c4b9c4089cf2e085c534d32421bd7ed0ecb90f40c4a84934c8c5"
+    },
+    {
+      "mode": "portable",
+      "evidence_artifact_id": 12974068082,
+      "deployment_and_preservation_passed": true,
+      "actual_product_policy_probe_passed": true,
+      "package_sha256": "14ca3bb69a0c7f8d35d43555764ba7dd61e0aa80fb8890810f4e1c401fb823b8",
+      "application_sha256": "f44bbf55684411feff3ef6a6229634faa84602c1e84d8e7d32d08e180b7638b9"
+    }
+  ],
+  "native_policy_probe_scope": "Product Backend save/apply, blacklist deny/read/enumeration, sibling prefix boundary, forced launch, child inheritance, application process restart, rule disable and application removal",
+  "application_hash_note": "Package-specific: extracted NSIS and portable executables differ only in the three-byte Tauri bundle-type marker (NSS versus UNK) in this build.",
+  "official_runtime_installer_sha256": "47b8dd6bc070d17c66e03a097df043214685208ea1c1522228e7ee009053fe5f",
+  "official_runtime_signature": "Valid",
+  "driver_signing_settings_changed": false,
+  "windows_10_11_client_acceptance": "not_run",
+  "interactive_uac_acceptance": "not_run",
+  "publisher_signing": "not_configured",
+  "release_published": false
+}

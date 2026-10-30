@@ -182,7 +182,7 @@ try {
     if ($payloadSignature.Status -ne 'Valid') { throw 'Bundled official installer is not Windows-trusted.' }
     $installedLock = Get-Content -LiteralPath (Join-Path $installDirectory 'runtime/runtime.lock.json') -Raw | ConvertFrom-Json
     if ($installedLock.sha256 -cne $runtimeLock.sha256 -or $installedLock.asset -cne $runtimeLock.asset) { throw 'Installed runtime lockfile does not match the audited build lock.' }
-    foreach ($name in @('runtime/NOTICE.md', 'THIRD-PARTY-NOTICES.md', 'README-runtime.md', 'USER-GUIDE.zh-CN.md', 'RELEASE-CHECKLIST.zh-CN.md', 'DEPENDENCY-REVIEW.md', 'VALIDATION.md')) {
+    foreach ($name in @('runtime/NOTICE.md', 'THIRD-PARTY-NOTICES.md', 'README-runtime.md', 'USER-GUIDE.zh-CN.md', 'RELEASE-CHECKLIST.zh-CN.md', 'DEPENDENCY-REVIEW.md', 'VALIDATION.md', 'validation/2026-10-30-server-2022.json')) {
         if (-not (Test-Path -LiteralPath (Join-Path $installDirectory $name))) { throw "Required installed notice missing: $name" }
     }
     if (-not ((Test-Path -LiteralPath (Join-Path $installDirectory 'LICENSE.txt')) -or (Test-Path -LiteralPath (Join-Path $installDirectory 'LICENSE.GPL-3.0.txt')))) {

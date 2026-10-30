@@ -6,7 +6,8 @@ no vulnerabilities. Re-run the scanners on the final release commit.
 ## Remediated in the lockfile
 
 - `tokio` 1.54.0 matched RUSTSEC-2026-0384 (Interval race). Updated to the patched
-  1.54.1 with Cargo. The new native build and runtime tests still need CI.
+  1.54.1 with Cargo. The native build and both package runtime tests passed in
+  https://github.com/KAIKAIKAISER/Sandboxie/actions/runs/41049659514 (commit 4787ecf).
 - Cargo also re-resolved a small number of existing dependency edges while
   updating the lockfile; the resulting graph was checked with `cargo tree --locked`.
 

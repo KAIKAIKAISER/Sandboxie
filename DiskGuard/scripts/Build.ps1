@@ -59,6 +59,9 @@ try {
         foreach ($guide in @('RELEASE-CHECKLIST.zh-CN.md', 'DEPENDENCY-REVIEW.md', 'VALIDATION.md')) {
             Copy-Item -LiteralPath (Join-Path $projectRoot "docs/$guide") -Destination (Join-Path $portableDirectory $guide)
         }
+        $validationDirectory = Join-Path $portableDirectory 'validation'
+        New-Item -ItemType Directory -Path $validationDirectory -Force | Out-Null
+        Copy-Item -Path (Join-Path $projectRoot 'docs/validation/*.json') -Destination $validationDirectory
         Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE.Classic') -Destination (Join-Path $portableDirectory 'LICENSE.GPL-3.0.txt')
         if (Test-Path -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md')) {
             Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destination $portableDirectory
